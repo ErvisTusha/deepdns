@@ -14,7 +14,7 @@
 #TODO Certificate monitoring
 #TODO Certificate Transparency monitoring
 #TODO Domain takeover detection
-#TODO Pattern analysis
+#TODO  Pattern analysis
 
 
 START_TIME=$(date +%s)
