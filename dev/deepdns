@@ -1,0 +1,239 @@
+#!/bin/bash
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)/config/settings.sh"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)/lib/core.sh"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)/lib/utils.sh"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)/lib/validation.sh"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)/lib/dns.sh"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)/lib/passive.sh"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)/lib/active.sh"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)/lib/scan.sh"
+
+# Setup initial state
+CREATE_TEMP_DIR
+
+# Main execution flow
+SHOW_VERSION
+
+if [ $# -eq 0 ]; then
+    SHOW_HELP
+    exit 1
+fi
+
+# Command line argument parsing
+if [ $# -eq 1 ]; then
+    if [ "${1,,}" = "install" ]; then
+        ! IS_SUDO && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}INSTALL Please run as root${NC}\n" && LOG "ERROR" "INSTALL Please run as root" && exit 1
+        INSTALL_SCRIPT
+        echo -e "\n${GREEN}${BOLD}[INFO]${NC} ${BOLD}DeepDNS installed successfully${NC}\n"
+        LOG "INFO" "INSTALLING DeepDNS"
+        exit 0
+    elif [ "$1" == "-h" ] || [ "$1" == "--help" ]; then
+        LOG "INFO" "SHOW_HELP"
+        SHOW_HELP
+        exit 0
+    elif [ "$1" == "-v" ] || [ "$1" == "--version" ]; then
+        LOG "INFO" "SHOW VERSION"
+        exit 0
+    elif VALIDATE_DOMAIN "$1"; then
+        DOMAIN="$1"
+        PASSIVE_SCAN_ENABLED=true
+        ACTIVE_SCAN_ENABLED=true
+        PATTERN_RECOGNITION_ENABLED=true
+        VHOST_SCAN_ENABLED=true
+        RECURSIVE_SCAN_ENABLED=false
+    else
+        LOG "INFO" "SHOW_HELP - INVALID argument"
+        SHOW_HELP
+        exit 1
+    fi
+fi
+
+while [[ "$#" -gt 0 ]]; do
+    case $1 in
+    -D | --debug)
+        DEBUG=true
+        if [[ "$2" != "" ]] && [[ ! "$2" =~ ^- ]]; then
+            DEBUG_LOG="$2"
+            shift
+        fi
+        ;;
+    -V | --verbose)
+        VERBOSE=true
+        ;;
+    -d | --domain)
+        IS_EMPTY "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Domain argument missing${NC}\n" && LOG "ERROR" "Domain argument missing" && exit 1
+        DOMAIN="$2"
+        shift
+        ;;
+    -w | --wordlist)
+        IS_EMPTY "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Wordlist argument missing${NC}\n" && LOG "ERROR" "Wordlist argument missing" && exit 1
+        ! FILE_EXISTS "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Wordlist file not found: $2${NC}\n" && LOG "ERROR" "Wordlist file not found: $2" && exit 1
+        ! FILE_READABLE "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}File is not readable : $2${NC}\n" && LOG "ERROR" "Wordlist file not readable: $2" && exit 1
+        WORDLIST_PATH="$2"
+        shift
+        ;;
+    -o | --output)
+        IS_EMPTY "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Output file argument missing${NC}\n" && LOG "ERROR" "Output file argument missing" && exit 1
+        OUTPUT="$2"
+        shift
+        ;;
+    -r | --recursive)
+        RECURSIVE_SCAN=true
+        IS_EMPTY "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Recursive depth argument missing${NC}\n" && LOG "ERROR" "Recursive depth argument missing" && exit 1
+        ! IS_NUMBER "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Invalid recursive depth: $2${NC}\n" && LOG "ERROR" "Invalid recursive depth: $2" && exit 1
+        if [ "$2" -gt 0 ] && [ "$2" -lt 11 ]; then
+            RECURSIVE_DEPTH="$2"
+        else
+            LOG "ERROR" "Recursive depth must be between 1 and 10"
+            echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Recursive depth must be between 1 and 10${NC}\n"
+            exit 1
+        fi
+        shift
+        ;;
+    -p | --passive)
+        PASSIVE_SCAN_ENABLED=true
+        ;;
+
+    -a | --active)
+        ACTIVE_SCAN_ENABLED=true
+        ;;
+    -R | --resolver)
+        IS_EMPTY "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Resolver file argument missing${NC}\n" && LOG "ERROR" "Resolver file argument missing" && exit 1
+        ! FILE_EXISTS "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Resolver file not found: $2${NC}\n" && LOG "ERROR" "Resolver file not found: $2" && exit 1
+        ! FILE_READABLE "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}File is not readable : $2${NC}\n" && LOG "ERROR" "Resolver file not readable: $2" && exit 1
+        FILE_EMPTY "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Resolver file is empty : $2${NC}\n" && LOG "ERROR" "Resolver file is empty: $2" && exit 1
+
+        RESOLVER_SCAN=true
+        RESOLVER_FILE="$2"
+        shift
+        ;;
+    --st-key)
+        IS_EMPTY "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}SecurityTrails API key missing${NC}\n" && LOG "ERROR" "SecurityTrails API key missing" && exit 1
+        ! VALIDATE_API_KEY "$2" "ST" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Invalid SecurityTrails API key format${NC}\n" && LOG "ERROR" "Invalid SecurityTrails API key format" && exit 1
+        SECURITYTRAILS_API_KEY="$2"
+        PASSIVE_SCAN_ENABLED=true
+        shift
+        ;;
+    --vt-key)
+        IS_EMPTY "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}VirusTotal API key missing${NC}\n" && LOG "ERROR" "VirusTotal API key missing" && exit 1
+        VIRUSTOTAL_API_KEY="$2"
+        PASSIVE_SCAN_ENABLED=true
+        shift
+        ;;
+    --censys-id)
+        IS_EMPTY "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Censys API ID missing${NC}\n" && LOG "ERROR" "Censys API ID missing" && exit 1
+        CENSYS_API_ID="$2"
+        PASSIVE_SCAN_ENABLED=true
+        shift
+        ;;
+    --censys-secret)
+        IS_EMPTY "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Censys API secret missing${NC}\n" && LOG "ERROR" "Censys API secret missing" && exit 1
+        CENSYS_API_SECRET="$2"
+        PASSIVE_SCAN_ENABLED=true
+        shift
+        ;;
+    --vhost)
+        VHOST_SCAN_ENABLED=true
+        ;;
+    --pattern)
+        PATTERN_RECOGNITION_ENABLED=true
+        ;;
+    --vhost-port)
+        IS_EMPTY "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Port list missing${NC}\n" && LOG "ERROR" "Port list missing" && exit 1
+        # Convert comma-separated ports to array and validate with duplicate check
+        declare -A PORT_CHECK # Associate array for duplicate checking
+        VHOST_PORTS=()        # Reset VHOST_PORTS array
+
+        IFS=',' read -ra TEMP_PORTS <<<"$2"
+        for port in "${TEMP_PORTS[@]}"; do
+            # Validate port number
+            if ! [[ "$port" =~ ^[0-9]+$ ]] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+                echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Invalid port number: $port${NC}\n"
+                LOG "ERROR" "Invalid port number: $port"
+                exit 1
+            fi
+
+            # Check for duplicates
+            if [[ ${PORT_CHECK[$port]} ]]; then
+                LOG "WARNING" "Duplicate port $port ignored"
+                continue
+            fi
+
+            # Add to arrays
+            PORT_CHECK[$port]=1
+            VHOST_PORTS+=("$port")
+        done
+        shift
+        ;;
+    -t | --threads)
+        IS_EMPTY "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Thread count missing${NC}\n" && LOG "ERROR" "Thread count missing" && exit 1
+        ! IS_NUMBER "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Invalid thread count: $2${NC}\n" && LOG "ERROR" "Invalid thread count: $2" && exit 1
+        if [ "$2" -gt 0 ] && [ "$2" -le 100 ]; then
+            THREAD_COUNT="$2"
+        else
+            LOG "ERROR" "Thread count must be between 1 and 50"
+            echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Thread count must be between 1 and 50${NC}\n"
+            exit 1
+        fi
+        shift
+        ;;
+    *)
+        ! VALIDATE_DOMAIN "$1" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Invalid domain: $1${NC}\n" && LOG "ERROR" "Invalid domain: $1" && exit 1
+        DOMAIN="$1"
+        ;;
+    esac
+    shift
+done
+
+# Main execution
+if [ "$DEBUG" = true ]; then
+    # Override debug log if provided
+    if [[ -n "$2" ]]; then
+        DEBUG_LOG="$2"
+    fi
+
+    # Ensure log directory exists
+    mkdir -p "$(dirname "$DEBUG_LOG")"
+
+    if [[ -f "$DEBUG_LOG" ]]; then
+        rm -f "$DEBUG_LOG" || {
+            echo -e "\n${RED}${BOLD}[ERROR]${NC} Unable to remove log file: $DEBUG_LOG"
+            exit 1
+            CLEANUP
+        }
+    fi
+
+    touch "$DEBUG_LOG" || {
+        echo -e "\n${RED}${BOLD}[ERROR]${NC} Unable to create log file: $DEBUG_LOG"
+        exit 1
+    }
+fi
+
+# Modify the main scanning section to include interrupt checks:
+if [[ -n "$DOMAIN" ]]; then
+    SCAN_DOMAIN "$DOMAIN" || {
+        echo -e "\n${RED}${BOLD}[ERROR]${NC} Scan failed for domain: $DOMAIN"
+        exit 1
+    }
+fi
+
+OUTPUT="${OUTPUT:-$PWD/${DOMAIN}.txt}"
+
+if [[ -f "$OUTPUT" ]]; then
+    echo -e "${YELLOW}${BOLD}[!]${NC} Output file exists: ${CYAN}${BOLD}$OUTPUT${NC}"
+    while true; do
+        echo -n -e "${YELLOW}${BOLD}[?]${NC} Overwrite? [${GREEN}${BOLD}y${NC}/${RED}${BOLD}N${NC}] "
+        read -r REPLY
+        if [[ "$REPLY" =~ ^[Yy]$ ]]; then
+            echo -e "${GREEN}${BOLD}[✓]${NC} Overwriting existing file"
+            break
+        elif [[ "$REPLY" =~ ^[Nn]$ ]] || [[ -z "$REPLY" ]]; then
+            echo -e "${RED}${BOLD}[!]${NC} Aborting scan"
+            exit 1
+        fi
+    done
+fi
+
+FORMAT_RESULTS "$DOMAIN" "$OUTPUT"
+exit $?
