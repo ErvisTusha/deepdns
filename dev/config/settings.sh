@@ -2,11 +2,14 @@
 
 # Directory settings
 declare -g SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." &>/dev/null && pwd)"
-declare -g LOG_DIR="$SCRIPT_DIR/logs"
-declare -g FILES_DIR="$SCRIPT_DIR/files"
+declare -g HOME_DIR="$HOME/.deepdns"
+declare -g LOG_DIR="$HOME_DIR/logs"
+declare -g FILES_DIR="$HOME_DIR/files"
 
-# Create required directories
-mkdir -p "$LOG_DIR" "$FILES_DIR"
+# Create required directories if they don't exist
+[[ ! -d "$HOME_DIR" ]] && mkdir -p "$HOME_DIR"
+[[ ! -d "$LOG_DIR" ]] && mkdir -p "$LOG_DIR"
+[[ ! -d "$FILES_DIR" ]] && mkdir -p "$FILES_DIR"
 
 # Debug settings
 declare -g DEBUG_LOG="$LOG_DIR/debug.log"

@@ -45,6 +45,17 @@ INSTALL_SCRIPT() {
     fi
 
     echo -e "\n${CYAN}${BOLD}[*]${NC} Installing DeepDNS..."
+
+    # Create required directories with correct permissions
+    local HOME_DIR="$HOME/.deepdns"
+    local LOG_DIR="$HOME_DIR/logs"
+    local FILES_DIR="$HOME_DIR/files"
+    
+    mkdir -p "$HOME_DIR" "$LOG_DIR" "$FILES_DIR"
+    chmod 755 "$HOME_DIR"
+    chmod 755 "$LOG_DIR"
+    chmod 755 "$FILES_DIR"
+
     if [ -f "/usr/local/bin/deepdns" ]; then
         echo -e "${YELLOW}${BOLD}[!]${NC} DeepDNS is already installed. Use 'update' to upgrade."
         LOG "INFO" "Installation skipped - already installed"
@@ -54,6 +65,7 @@ INSTALL_SCRIPT() {
     if sudo install -m 0755 -o root -g root "$0" /usr/local/bin/deepdns; then
         echo -e "${GREEN}${BOLD}[✓]${NC} Successfully installed DeepDNS:"
         echo -e "   ${CYAN}${BOLD}→${NC} Binary: /usr/local/bin/deepdns"
+        echo -e "   ${CYAN}${BOLD}→${NC} Config: $HOME_DIR"
         echo -e "\nYou can now use 'deepdns' from anywhere"
         LOG "INFO" "Installation successful"
         return 0

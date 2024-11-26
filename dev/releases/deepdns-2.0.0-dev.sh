@@ -9,10 +9,13 @@
 
 # Directory settings
 declare -g SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." &>/dev/null && pwd)"
-declare -g LOG_DIR="$SCRIPT_DIR/logs"
-declare -g FILES_DIR="$SCRIPT_DIR/files"
-# Create required directories
-mkdir -p "$LOG_DIR" "$FILES_DIR"
+declare -g HOME_DIR="$HOME/.deepdns"
+declare -g LOG_DIR="$HOME_DIR/logs"
+declare -g FILES_DIR="$HOME_DIR/files"
+# Create required directories if they don't exist
+[[ ! -d "$HOME_DIR" ]] && mkdir -p "$HOME_DIR"
+[[ ! -d "$LOG_DIR" ]] && mkdir -p "$LOG_DIR"
+[[ ! -d "$FILES_DIR" ]] && mkdir -p "$FILES_DIR"
 # Debug settings
 declare -g DEBUG_LOG="$LOG_DIR/debug.log"
 # Global variables
@@ -223,6 +226,15 @@ INSTALL_SCRIPT() {
         return 1
     fi
     echo -e "\n${CYAN}${BOLD}[*]${NC} Installing DeepDNS..."
+    # Create required directories with correct permissions
+    local HOME_DIR="$HOME/.deepdns"
+    local LOG_DIR="$HOME_DIR/logs"
+    local FILES_DIR="$HOME_DIR/files"
+    
+    mkdir -p "$HOME_DIR" "$LOG_DIR" "$FILES_DIR"
+    chmod 755 "$HOME_DIR"
+    chmod 755 "$LOG_DIR"
+    chmod 755 "$FILES_DIR"
     if [ -f "/usr/local/bin/deepdns" ]; then
         echo -e "${YELLOW}${BOLD}[!]${NC} DeepDNS is already installed. Use 'update' to upgrade."
         LOG "INFO" "Installation skipped - already installed"
@@ -231,6 +243,7 @@ INSTALL_SCRIPT() {
     if sudo install -m 0755 -o root -g root "$0" /usr/local/bin/deepdns; then
         echo -e "${GREEN}${BOLD}[✓]${NC} Successfully installed DeepDNS:"
         echo -e "   ${CYAN}${BOLD}→${NC} Binary: /usr/local/bin/deepdns"
+        echo -e "   ${CYAN}${BOLD}→${NC} Config: $HOME_DIR"
         echo -e "\nYou can now use 'deepdns' from anywhere"
         LOG "INFO" "Installation successful"
         return 0
