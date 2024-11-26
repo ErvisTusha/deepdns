@@ -109,8 +109,7 @@ UPDATE_SCRIPT() {
     local TEMP_FILE=$(mktemp)
     if curl -sL "$REPO_URL" -o "$TEMP_FILE"; then
         # Extract version from downloaded file
-        NEW_VERSION=$(grep "VERSION=" "$TEMP_FILE" | cut -d'"' -f2)
-        echo $NEW_VERSION "aaaaaaaaaaaaaaaaaaaaaa"
+        NEW_VERSION=$(grep "declare -g VERSION=" "$TEMP_FILE" | cut -d'"' -f2)
         if sudo cp "$TEMP_FILE" /usr/local/bin/deepdns && sudo chmod +x /usr/local/bin/deepdns; then
             rm -f "$TEMP_FILE"
             echo -e "${GREEN}${BOLD}[✓]${NC} Successfully updated DeepDNS:"
