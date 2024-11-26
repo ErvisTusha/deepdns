@@ -31,9 +31,6 @@ mkdir -p "$RELEASES_DIR"
 # Clean up before starting
 CLEANUP_FILES
 
-# delete deepdns.sh.sha256
-rm -f "$RELEASES_DIR/deepdns.sh.sha256"
-
 # Get current version from settings.sh
 CURRENT_VERSION=$(grep "VERSION=" "$SCRIPT_DIR/config/settings.sh" | cut -d'"' -f2)
 

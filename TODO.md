@@ -1,9 +1,17 @@
 
 
-**FIXME INSTALL**
+**FIXME: INSTALL**
 
-**TODO update**
+**TODO: update**
 
-**TODO uninstall**
+**TODO: uninstall**
 
-**FIXME deepdns.sh.sha256**
+**TODO: use functions from ./dev/lib/core.sh**
+
+**TOOD: add format output**
+
+**TODO: add more services for passive scan**
+
+**TODO: Zone transfer**
+
+**TODO: DNSSEC**
