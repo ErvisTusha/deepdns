@@ -1,4 +1,4 @@
-**FIXME Scan Configuration**
+
 
 **FIXME INSTALL**
 
