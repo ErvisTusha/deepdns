@@ -44,7 +44,7 @@ CLEAN_WORDLIST() {
 
     # if WORDLIST is empty, check if os is kali linux use seclists /usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt
     if [ -z "$INPUT_FILE" ]; then
-        INPUT_FILE="/usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt"
+        INPUT_FILE=$WORDLIST_PATH
     fi
 
     if [[ ! -f "$INPUT_FILE" ]]; then

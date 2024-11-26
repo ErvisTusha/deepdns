@@ -23,7 +23,7 @@ declare -g AUTHOR="Ervis Tusha"
 declare -g DEFAULT_RECURSIVE_DEPTH=3
 declare -g DEFAULT_OUTPUT_DIR="$PWD"
 declare -g OUTPUT_FORMAT="txt"
-declare -g WORDLIST_PATH=""
+declare -g WORDLIST_PATH="/usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt"
 
 # API Keys
 declare -g SECURITYTRAILS_API_KEY=""

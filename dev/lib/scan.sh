@@ -27,22 +27,23 @@ SCAN_DOMAIN() {
     [[ "$PASSIVE_SCAN_ENABLED" == true ]] && SCAN_MODES+="${GREEN}${BOLD}Passive${NC} "
     [[ "$ACTIVE_SCAN_ENABLED" == true ]] && SCAN_MODES+="${GREEN}${BOLD}Active${NC} "
     [[ "$RECURSIVE_SCAN" == true ]] && SCAN_MODES+="${GREEN}${BOLD}Recursive(${RECURSIVE_DEPTH})${NC} "
-    [[ "$VHOST_SCAN_ENABLED" == true ]] && SCAN_MODES+="${GREEN}${BOLD}VHost${NC} "
+    [[ "$VHOST_SCAN_ENABLED" == true ]] && SCAN_MODES+="${GREEN}${BOLD}VHost(${VHOST_PORTS[@]})${NC} "
     [[ "$PATTERN_RECOGNITION_ENABLED" == true ]] && SCAN_MODES+="${GREEN}${BOLD}Pattern${NC} "
 
     echo -e " ${PURPLE}${BOLD}Scan Modes${NC}       │ ${SCAN_MODES:-${RED}${BOLD}None${NC}}"
     echo -e " ${PURPLE}${BOLD}Wordlist${NC}         │ ${CYAN}${BOLD}${WORDLIST_PATH}${NC}"
+    [[ "$RESOLVER_SCAN" == true ]] && echo -e " ${PURPLE}${BOLD}Resolver File${NC}    │ ${CYAN}${BOLD}$RESOLVER_FILE${NC}"
+    echo -e " ${PURPLE}${BOLD}Thread Count${NC}     │ ${CYAN}${BOLD}${THREAD_COUNT}${NC}"
     echo -e " ${PURPLE}${BOLD}Output File${NC}      │ ${CYAN}${BOLD}${OUTPUT:-Not specified}${NC}"
 
-    [[ "$RESOLVER_SCAN" == true ]] && echo -e " ${PURPLE}${BOLD}Resolver File${NC}    │ ${CYAN}${BOLD}$RESOLVER_FILE${NC}"
     [[ "$DEBUG" == true ]] && echo -e " ${PURPLE}${BOLD}Debug Mode${NC}       │ ${GREEN}${BOLD}Enabled${NC}"
+    [[ "$DEBUG" == true ]] && echo -e " ${PURPLE}${BOLD}Log File${NC}         │ ${CYAN}${BOLD}${DEBUG_LOG}${NC}"
     [[ "$VERBOSE" == true ]] && echo -e " ${PURPLE}${BOLD}Verbose Mode${NC}     │ ${GREEN}${BOLD}Enabled${NC}"
 
     CHECK_DNS_TOOLS || return 1
 
     CLEAN_RESOLVERS "$RESOLVER_FILE"
     CLEAN_WORDLIST "$WORDLIST_PATH"
-
 
     echo -e "\n${BLUE}${BOLD}============================================================================${NC}"
     echo -e "\n${BLUE}${BOLD}[»]${NC} ${UNDERLINE}Scan Status${NC}\n"
