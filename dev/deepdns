@@ -22,31 +22,43 @@ fi
 
 # Command line argument parsing
 if [ $# -eq 1 ]; then
-    if [ "${1,,}" = "install" ]; then
-        ! IS_SUDO && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}INSTALL Please run as root${NC}\n" && LOG "ERROR" "INSTALL Please run as root" && exit 1
-        INSTALL_SCRIPT
-        echo -e "\n${GREEN}${BOLD}[INFO]${NC} ${BOLD}DeepDNS installed successfully${NC}\n"
-        LOG "INFO" "INSTALLING DeepDNS"
-        exit 0
-    elif [ "$1" == "-h" ] || [ "$1" == "--help" ]; then
-        LOG "INFO" "SHOW_HELP"
-        SHOW_HELP
-        exit 0
-    elif [ "$1" == "-v" ] || [ "$1" == "--version" ]; then
-        LOG "INFO" "SHOW VERSION"
-        exit 0
-    elif VALIDATE_DOMAIN "$1"; then
-        DOMAIN="$1"
-        PASSIVE_SCAN_ENABLED=true
-        ACTIVE_SCAN_ENABLED=true
-        PATTERN_RECOGNITION_ENABLED=true
-        VHOST_SCAN_ENABLED=true
-        RECURSIVE_SCAN_ENABLED=false
-    else
-        LOG "INFO" "SHOW_HELP - INVALID argument"
-        SHOW_HELP
-        exit 1
-    fi
+    case "${1,,}" in
+        "install")
+            INSTALL_SCRIPT
+            exit $?
+            ;;
+        "update")
+            UPDATE_SCRIPT
+            exit $?
+            ;;
+        "uninstall")
+            UNINSTALL_SCRIPT
+            exit $?
+            ;;
+        "-h" | "--help")
+            LOG "INFO" "SHOW_HELP"
+            SHOW_HELP
+            exit 0
+            ;;
+        "-v" | "--version")
+            LOG "INFO" "SHOW VERSION"
+            exit 0
+            ;;
+        *)
+            if VALIDATE_DOMAIN "$1"; then
+                DOMAIN="$1"
+                PASSIVE_SCAN_ENABLED=true
+                ACTIVE_SCAN_ENABLED=true
+                PATTERN_RECOGNITION_ENABLED=true
+                VHOST_SCAN_ENABLED=true
+                RECURSIVE_SCAN_ENABLED=false
+            else
+                LOG "INFO" "SHOW_HELP - INVALID argument"
+                SHOW_HELP
+                exit 1
+            fi
+            ;;
+    esac
 fi
 
 while [[ "$#" -gt 0 ]]; do

@@ -36,44 +36,114 @@ IS_INSTALLED() {
 }
 
 INSTALL_SCRIPT() {
-    local SCRIPT=""
-    SCRIPT="$(basename "$0")"
-    if [[ -z "$1" ]]; then
-        INSTALL_DIR="/usr/local/bin"
-    else
-        if ! [[ -d "$1" ]]; then
-            [[ "$VERBOSE" == "true" ]] && echo "ERROR:INSTALL_SCRIPT Invalid directory provided"
-            [[ "$DEBUG" == "true" ]] && echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR:INSTALL_SCRIPT Invalid directory provided" >>"$DEBUG_LOG"
-            return 1
-        fi
-        INSTALL_DIR="$1"
-    fi
+    LOG "INFO" "Starting DeepDNS installation"
 
-    if [[ "$EUID" -ne 0 ]]; then
-        [[ "$VERBOSE" == "true" ]] && echo "INFO:INSTALL_SCRIPT User does not have root privileges"
-        [[ "$DEBUG" == "true" ]] && echo "$(date '+%Y-%m-%d %H:%M:%S') INFO:INSTALL_SCRIPT User does not have root privileges" >>"$DEBUG_LOG"
+    if ! sudo -v &>/dev/null; then
+        echo -e "${RED}${BOLD}[ERROR]${NC} Sudo access required for installation"
+        LOG "ERROR" "Installation failed - no sudo access"
         return 1
     fi
 
-    if command -v "$SCRIPT" >/dev/null 2>&1; then
-        [[ "$VERBOSE" == "true" ]] && echo "INFO:INSTALL_SCRIPT $SCRIPT is already installed"
-        [[ "$DEBUG" == "true" ]] && echo "$(date '+%Y-%m-%d %H:%M:%S') INFO:INSTALL_SCRIPT $SCRIPT is already installed" >>"$DEBUG_LOG"
+    echo -e "\n${CYAN}${BOLD}[*]${NC} Installing DeepDNS..."
+    if [ -f "/usr/local/bin/deepdns" ]; then
+        echo -e "${YELLOW}${BOLD}[!]${NC} DeepDNS is already installed. Use 'update' to upgrade."
+        LOG "INFO" "Installation skipped - already installed"
         return 0
     fi
 
-    NEW_NAME=$(echo "$SCRIPT" | sed 's/\.sh$//')
-
-    cp "$0" "$INSTALL_DIR/$NEW_NAME"
-    chmod +x "$INSTALL_DIR/$NEW_NAME"
-
-    if ! command -v "$NEW_NAME" >/dev/null 2>&1; then
-        [[ "$VERBOSE" == "true" ]] && echo "ERROR:INSTALL_SCRIPT Failed to install $NEW_NAME"
-        [[ "$DEBUG" == "true" ]] && echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR:INSTALL_SCRIPT Failed to install $NEW_NAME" >>"$DEBUG_LOG"
+    if sudo install -m 0755 -o root -g root "$0" /usr/local/bin/deepdns; then
+        echo -e "${GREEN}${BOLD}[✓]${NC} Successfully installed DeepDNS:"
+        echo -e "   ${CYAN}${BOLD}→${NC} Binary: /usr/local/bin/deepdns"
+        echo -e "\nYou can now use 'deepdns' from anywhere"
+        LOG "INFO" "Installation successful"
+        return 0
+    else
+        echo -e "${RED}${BOLD}[✗]${NC} Failed to install DeepDNS"
+        LOG "ERROR" "Installation failed - copy error"
         return 1
     fi
-    [[ "$VERBOSE" == "true" ]] && echo "INFO:INSTALL_SCRIPT $NEW_NAME installed successfully"
-    [[ "$DEBUG" == "true" ]] && echo "$(date '+%Y-%m-%d %H:%M:%S') INFO:INSTALL_SCRIPT $NEW_NAME installed successfully" >>"$DEBUG_LOG"
-    return 0
+}
+
+UPDATE_SCRIPT() {
+    LOG "INFO" "Starting DeepDNS update"
+    local CURRENT_VERSION="$VERSION"
+    local NEW_VERSION
+
+    echo -e "\n${CYAN}${BOLD}[*]${NC} Updating DeepDNS..."
+    echo -e "   ${CYAN}${BOLD}→${NC} Current version: ${YELLOW}${BOLD}${CURRENT_VERSION}${NC}"
+
+    # Check if installed
+    if [ ! -f "/usr/local/bin/deepdns" ]; then
+        echo -e "${YELLOW}${BOLD}[!]${NC} DeepDNS is not installed. Use 'install' first."
+        LOG "ERROR" "Update failed - not installed"
+        return 1
+    fi
+
+    # Verify sudo access
+    if ! sudo -v &>/dev/null; then
+        echo -e "${RED}${BOLD}[ERROR]${NC} Sudo access required for update"
+        LOG "ERROR" "Update failed - no sudo access"
+        return 1
+    fi
+
+    # Check for curl
+    if ! command -v curl &>/dev/null; then
+        echo -e "${RED}${BOLD}[ERROR]${NC} curl is required but not installed"
+        LOG "ERROR" "Update failed - curl not found"
+        return 1
+    fi
+
+    # Download and update
+    local TEMP_FILE=$(mktemp)
+    if curl -sL "$REPO_URL" -o "$TEMP_FILE"; then
+        # Extract version from downloaded file
+        NEW_VERSION=$(grep "VERSION=" "$TEMP_FILE" | cut -d'"' -f2)
+        echo $NEW_VERSION "aaaaaaaaaaaaaaaaaaaaaa"
+        if sudo cp "$TEMP_FILE" /usr/local/bin/deepdns && sudo chmod +x /usr/local/bin/deepdns; then
+            rm -f "$TEMP_FILE"
+            echo -e "${GREEN}${BOLD}[✓]${NC} Successfully updated DeepDNS:"
+            echo -e "   ${CYAN}${BOLD}→${NC} Binary: /usr/local/bin/deepdns"
+            echo -e "   ${CYAN}${BOLD}→${NC} Updated: ${YELLOW}${BOLD}v${CURRENT_VERSION}${NC} ${GREEN}${BOLD}→${NC} ${YELLOW}${BOLD}v${NEW_VERSION}${NC}"
+            echo -e "\nYou can now use 'deepdns' from anywhere"
+            LOG "INFO" "Update successful from v${CURRENT_VERSION} to v${NEW_VERSION}"
+            return 0
+        fi
+    fi
+
+    rm -f "$TEMP_FILE"
+    echo -e "${RED}${BOLD}[✗]${NC} Failed to update DeepDNS"
+    LOG "ERROR" "Update failed - download/copy error"
+    return 1
+}
+
+UNINSTALL_SCRIPT() {
+    LOG "INFO" "Starting DeepDNS uninstallation"
+
+    echo -e "\n${CYAN}${BOLD}[*]${NC} Uninstalling DeepDNS..."
+
+    if [ ! -f "/usr/local/bin/deepdns" ]; then
+        echo -e "${YELLOW}${BOLD}[!]${NC} DeepDNS is not installed"
+        LOG "INFO" "Uninstall skipped - not installed"
+        return 0
+    fi
+
+    if ! sudo -v &>/dev/null; then
+        echo -e "${RED}${BOLD}[ERROR]${NC} Sudo access required for uninstallation"
+        LOG "ERROR" "Uninstall failed - no sudo access"
+        return 1
+    fi
+
+    if sudo rm -f /usr/local/bin/deepdns; then
+        echo -e "${GREEN}${BOLD}[✓]${NC} Successfully uninstalled DeepDNS:"
+        echo -e "   ${CYAN}${BOLD}→${NC} Removed: /usr/local/bin/deepdns"
+        echo -e "\nDeepDNS has been completely removed from your system"
+        LOG "INFO" "Uninstall successful"
+        return 0
+    else
+        echo -e "${RED}${BOLD}[✗]${NC} Failed to uninstall DeepDNS"
+        LOG "ERROR" "Uninstall failed - removal error"
+        return 1
+    fi
 }
 
 FILE_READABLE() {
