@@ -1,11 +1,5 @@
 
 
-**FIXME: INSTALL**
-
-**TODO: update**
-
-**TODO: uninstall**
-
 **TODO: use functions from ./dev/lib/core.sh**
 
 **TOOD: add format output**
