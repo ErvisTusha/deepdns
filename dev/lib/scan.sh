@@ -19,7 +19,7 @@ SCAN_DOMAIN() {
 
     echo -e "${BLUE}${BOLD}┌──────────────────────────────────────────────────────────────────────────┐${NC}"
     echo -e "${BLUE}${BOLD}│${NC}                           ${UNDERLINE}${BOLD}Scan Configuration${NC}                             ${BLUE}${BOLD}│${NC}"
-    echo -e "${BLUE}${BOLD}└──────────────────────────────────────────────────────────────────────────┘${NC}\n"
+    echo -e "${BLUE}${BOLD}└────��──────────────────────────────────────────────────────────────────────┘${NC}\n"
 
     echo -e " ${PURPLE}${BOLD}Target Domain${NC}    │ ${YELLOW}${BOLD}$TARGET_DOMAIN${NC} | ${GRAY}${DIM}$(date '+%Y-%m-%d %H:%M:%S')${NC}\n"
 
@@ -31,6 +31,12 @@ SCAN_DOMAIN() {
     [[ "$PATTERN_RECOGNITION_ENABLED" == true ]] && SCAN_MODES+="${GREEN}${BOLD}Pattern${NC} "
 
     echo -e " ${PURPLE}${BOLD}Scan Modes${NC}       │ ${SCAN_MODES:-${RED}${BOLD}None${NC}}"
+    
+    # Add filter information if VHOST scan is enabled
+    if [[ "$VHOST_SCAN_ENABLED" == true && -n "$VHOST_FILTER" ]]; then
+        echo -e " ${PURPLE}${BOLD}VHOST filter${NC}     │ ${CYAN}${BOLD}${VHOST_FILTER_TYPE}${NC}: ${YELLOW}${BOLD}${VHOST_FILTER}${NC}"
+    fi
+    
     echo -e " ${PURPLE}${BOLD}Wordlist${NC}         │ ${CYAN}${BOLD}${WORDLIST_PATH}${NC}"
     [[ "$RESOLVER_SCAN" == true ]] && echo -e " ${PURPLE}${BOLD}Resolver File${NC}    │ ${CYAN}${BOLD}$RESOLVER_FILE${NC}"
     echo -e " ${PURPLE}${BOLD}Thread Count${NC}     │ ${CYAN}${BOLD}${THREAD_COUNT}${NC}"

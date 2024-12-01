@@ -369,21 +369,79 @@ VHOST_SCAN() {
                 local DURATION=$(((END_TIME - START_TIME) / 1000000))
 
                 if [[ "$STATUS" =~ ^(200|30[0-9])$ ]]; then
-                    {
-                        flock 200
-                        printf "\033[2K\r" # Clear current line
-                        local STATUS_COLOR=$(get_status_color "$STATUS")
-                        echo -e "${INDENT}   ${GREEN}${BOLD}[+]${NC} Found: ${PROTOCOL}://${VHOST}"
-                        echo -e "${INDENT}      └─▶ IP: ${DOMAIN_IP} ${PROTOCOL}://${DOMAIN}:${port}"
-                        echo -e "${INDENT}      [${BOLD}Status: ${STATUS_COLOR}${STATUS}${NC}, ${BOLD}Size: ${BLUE}${SIZE}${NC}, ${BOLD}Words: ${YELLOW}${WORDS}${NC}, ${BOLD}Lines: ${MAGENTA}${LINES}${NC}, ${BOLD}Duration: ${CYAN}${DURATION}ms${NC}]"
+                    # Apply filters if specified
+                    local SHOW_RESULT=true
+                    if [[ -n "$VHOST_FILTER" ]]; then
+                        case "$VHOST_FILTER_TYPE" in
+                            "status")
+                                # Split comma-separated filters into array
+                                IFS=',' read -ra FILTERS <<< "$VHOST_FILTER"
+                                for filter in "${FILTERS[@]}"; do
+                                    # If any filter matches, hide the result
+                                    [[ "$STATUS" =~ ^($filter)$ ]] && SHOW_RESULT=false && break
+                                done
+                                ;;
+                            "size")
+                                IFS=',' read -ra FILTERS <<< "$VHOST_FILTER"
+                                for filter in "${FILTERS[@]}"; do
+                                    if [[ "$filter" =~ ^[0-9]+$ ]]; then
+                                        [[ "$SIZE" -eq "$filter" ]] && SHOW_RESULT=false && break
+                                    elif [[ "$filter" =~ ^\<[0-9]+$ ]]; then
+                                        local val=${filter#<}
+                                        [[ "$SIZE" -lt "$val" ]] && SHOW_RESULT=false && break
+                                    elif [[ "$filter" =~ ^\>[0-9]+$ ]]; then
+                                        local val=${filter#>}
+                                        [[ "$SIZE" -gt "$val" ]] && SHOW_RESULT=false && break
+                                    fi
+                                done
+                                ;;
+                            "words")
+                                IFS=',' read -ra FILTERS <<< "$VHOST_FILTER"
+                                for filter in "${FILTERS[@]}"; do
+                                    if [[ "$filter" =~ ^[0-9]+$ ]]; then
+                                        [[ "$WORDS" -eq "$filter" ]] && SHOW_RESULT=false && break
+                                    elif [[ "$filter" =~ ^\<[0-9]+$ ]]; then
+                                        local val=${filter#<}
+                                        [[ "$WORDS" -lt "$val" ]] && SHOW_RESULT=false && break
+                                    elif [[ "$filter" =~ ^\>[0-9]+$ ]]; then
+                                        local val=${filter#>}
+                                        [[ "$WORDS" -gt "$val" ]] && SHOW_RESULT=false && break
+                                    fi
+                                done
+                                ;;
+                            "lines")
+                                IFS=',' read -ra FILTERS <<< "$VHOST_FILTER"
+                                for filter in "${FILTERS[@]}"; do
+                                    if [[ "$filter" =~ ^[0-9]+$ ]]; then
+                                        [[ "$LINES" -eq "$filter" ]] && SHOW_RESULT=false && break
+                                    elif [[ "$filter" =~ ^\<[0-9]+$ ]]; then
+                                        local val=${filter#<}
+                                        [[ "$LINES" -lt "$val" ]] && SHOW_RESULT=false && break
+                                    elif [[ "$filter" =~ ^\>[0-9]+$ ]]; then
+                                        local val=${filter#>}
+                                        [[ "$LINES" -gt "$val" ]] && SHOW_RESULT=false && break
+                                    fi
+                                done
+                                ;;
+                        esac
+                    fi
 
-                        if [[ "$RAW_OUTPUT" == true ]]; then
-                            echo "${DOMAIN_IP}    ${VHOST}" >>"$chunk_results"
-                        else
-                            echo "${VHOST}:${port} ${PROTOCOL}://${DOMAIN}:${port} (Status: ${STATUS})" >>"$chunk_results"
-                        fi
+                    if [[ "$SHOW_RESULT" == true ]]; then
+                        {
+                            flock 200
+                            printf "\033[2K\r" # Clear current line
+                            local STATUS_COLOR=$(get_status_color "$STATUS")
+                            echo -e "${INDENT}   ${GREEN}${BOLD}[+]${NC} Found: ${PROTOCOL}://${VHOST}"
+                            echo -e "${INDENT}      └─▶ IP: ${DOMAIN_IP} ${PROTOCOL}://${DOMAIN}:${port}"
+                            echo -e "${INDENT}      [${BOLD}Status: ${STATUS_COLOR}${STATUS}${NC}, ${BOLD}Size: ${BLUE}${SIZE}${NC}, ${BOLD}Words: ${YELLOW}${WORDS}${NC}, ${BOLD}Lines: ${MAGENTA}${LINES}${NC}, ${BOLD}Duration: ${CYAN}${DURATION}ms${NC}]"
 
-                    } 200>"$STATUS_FILE.lock"
+                            if [[ "$RAW_OUTPUT" == true ]]; then
+                                echo "${DOMAIN_IP}    ${VHOST}" >>"$chunk_results"
+                            else
+                                echo "${VHOST}:${port} ${PROTOCOL}://${DOMAIN}:${port} (Status: ${STATUS})" >>"$chunk_results"
+                            fi
+                        } 200>"$STATUS_FILE.lock"
+                    fi
                 fi
 
                 ((processed++))
@@ -454,7 +512,7 @@ VHOST_SCAN() {
     if find "$THREAD_DIR" -name "port_*_results" -type f | grep -q .; then
         cat "$THREAD_DIR"/port_*_results | sort -u >"$OUTPUT_FILE"
         FOUND_COUNT=$(wc -l <"$OUTPUT_FILE")
-        [[ "$RECURSIVE_SCAN_ENABLED" == false ]] && echo -e "\n${GREEN}${BOLD}[✓]${NC} VHOST scan complete: Found ${WHITE}${BOLD}${FOUND_COUNT}${NC} hosts"
+        [[ "$RECURSIVE_SCAN_ENABLED" == false ]] && echo -e  "${GREEN}${BOLD}[✓]${NC} VHOST scan complete: Found ${WHITE}${BOLD}${FOUND_COUNT}${NC} hosts"
     fi
 
     # Final cleanup

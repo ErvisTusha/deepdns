@@ -153,29 +153,38 @@ while [[ "$#" -gt 0 ]]; do
         ;;
     --vhost-port)
         IS_EMPTY "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Port list missing${NC}\n" && LOG "ERROR" "Port list missing" && exit 1
-        # Convert comma-separated ports to array and validate with duplicate check
-        declare -A PORT_CHECK # Associate array for duplicate checking
-        VHOST_PORTS=()        # Reset VHOST_PORTS array
-
-        IFS=',' read -ra TEMP_PORTS <<<"$2"
-        for port in "${TEMP_PORTS[@]}"; do
-            # Validate port number
+        # Remove duplicate ports using sort -u
+        VHOST_PORTS=($(echo "$2" | tr ',' '\n' | sort -un | tr '\n' ' '))
+        # Validate ports
+        for port in "${VHOST_PORTS[@]}"; do
             if ! [[ "$port" =~ ^[0-9]+$ ]] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
                 echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Invalid port number: $port${NC}\n"
                 LOG "ERROR" "Invalid port number: $port"
                 exit 1
             fi
-
-            # Check for duplicates
-            if [[ ${PORT_CHECK[$port]} ]]; then
-                LOG "WARNING" "Duplicate port $port ignored"
-                continue
-            fi
-
-            # Add to arrays
-            PORT_CHECK[$port]=1
-            VHOST_PORTS+=("$port")
         done
+        LOG "DEBUG" "Using unique ports: ${VHOST_PORTS[*]}"
+        shift
+        ;;
+    --vhost-filter)
+        IS_EMPTY "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Filter argument missing${NC}\n" && LOG "ERROR" "Filter argument missing" && exit 1
+        # Remove duplicate filters
+        VHOST_FILTER=$(echo "$2" | tr ',' '\n' | sort -u | tr '\n' ',' | sed 's/,$//')
+        LOG "DEBUG" "Using unique filters: $VHOST_FILTER"
+        shift
+        ;;
+    --vhost-filter-type)
+        IS_EMPTY "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Filter type argument missing${NC}\n" && LOG "ERROR" "Filter type argument missing" && exit 1
+        case "${2,,}" in
+            "status"|"size"|"words"|"lines")
+                VHOST_FILTER_TYPE="$2"
+                ;;
+            *)
+                echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Invalid filter type. Use: status, size, words, or lines${NC}\n"
+                LOG "ERROR" "Invalid filter type: $2"
+                exit 1
+                ;;
+        esac
         shift
         ;;
     -t | --threads)

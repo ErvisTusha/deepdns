@@ -58,6 +58,9 @@ declare -r WHITE='\033[1;37m'
 # Add these variables near the top with other declarations
 declare -g CLEANUP_DONE=false
 declare -g INTERRUPT_RECEIVED=false
+# Response filtering
+declare -g VHOST_FILTER=""
+declare -g VHOST_FILTER_TYPE="status" # status, size, words, lines
 # Thread count
 declare -g THREAD_COUNT=10
 # GitHub repository URL
@@ -1373,19 +1376,77 @@ VHOST_SCAN() {
                 local LINES=$(echo "$RESPONSE" | wc -l)
                 local DURATION=$(((END_TIME - START_TIME) / 1000000))
                 if [[ "$STATUS" =~ ^(200|30[0-9])$ ]]; then
-                    {
-                        flock 200
-                        printf "\033[2K\r" # Clear current line
-                        local STATUS_COLOR=$(get_status_color "$STATUS")
-                        echo -e "${INDENT}   ${GREEN}${BOLD}[+]${NC} Found: ${PROTOCOL}://${VHOST}"
-                        echo -e "${INDENT}      └─▶ IP: ${DOMAIN_IP} ${PROTOCOL}://${DOMAIN}:${port}"
-                        echo -e "${INDENT}      [${BOLD}Status: ${STATUS_COLOR}${STATUS}${NC}, ${BOLD}Size: ${BLUE}${SIZE}${NC}, ${BOLD}Words: ${YELLOW}${WORDS}${NC}, ${BOLD}Lines: ${MAGENTA}${LINES}${NC}, ${BOLD}Duration: ${CYAN}${DURATION}ms${NC}]"
-                        if [[ "$RAW_OUTPUT" == true ]]; then
-                            echo "${DOMAIN_IP}    ${VHOST}" >>"$chunk_results"
-                        else
-                            echo "${VHOST}:${port} ${PROTOCOL}://${DOMAIN}:${port} (Status: ${STATUS})" >>"$chunk_results"
-                        fi
-                    } 200>"$STATUS_FILE.lock"
+                    # Apply filters if specified
+                    local SHOW_RESULT=true
+                    if [[ -n "$VHOST_FILTER" ]]; then
+                        case "$VHOST_FILTER_TYPE" in
+                            "status")
+                                # Split comma-separated filters into array
+                                IFS=',' read -ra FILTERS <<< "$VHOST_FILTER"
+                                for filter in "${FILTERS[@]}"; do
+                                    # If any filter matches, hide the result
+                                    [[ "$STATUS" =~ ^($filter)$ ]] && SHOW_RESULT=false && break
+                                done
+                                ;;
+                            "size")
+                                IFS=',' read -ra FILTERS <<< "$VHOST_FILTER"
+                                for filter in "${FILTERS[@]}"; do
+                                    if [[ "$filter" =~ ^[0-9]+$ ]]; then
+                                        [[ "$SIZE" -eq "$filter" ]] && SHOW_RESULT=false && break
+                                    elif [[ "$filter" =~ ^\<[0-9]+$ ]]; then
+                                        local val=${filter#<}
+                                        [[ "$SIZE" -lt "$val" ]] && SHOW_RESULT=false && break
+                                    elif [[ "$filter" =~ ^\>[0-9]+$ ]]; then
+                                        local val=${filter#>}
+                                        [[ "$SIZE" -gt "$val" ]] && SHOW_RESULT=false && break
+                                    fi
+                                done
+                                ;;
+                            "words")
+                                IFS=',' read -ra FILTERS <<< "$VHOST_FILTER"
+                                for filter in "${FILTERS[@]}"; do
+                                    if [[ "$filter" =~ ^[0-9]+$ ]]; then
+                                        [[ "$WORDS" -eq "$filter" ]] && SHOW_RESULT=false && break
+                                    elif [[ "$filter" =~ ^\<[0-9]+$ ]]; then
+                                        local val=${filter#<}
+                                        [[ "$WORDS" -lt "$val" ]] && SHOW_RESULT=false && break
+                                    elif [[ "$filter" =~ ^\>[0-9]+$ ]]; then
+                                        local val=${filter#>}
+                                        [[ "$WORDS" -gt "$val" ]] && SHOW_RESULT=false && break
+                                    fi
+                                done
+                                ;;
+                            "lines")
+                                IFS=',' read -ra FILTERS <<< "$VHOST_FILTER"
+                                for filter in "${FILTERS[@]}"; do
+                                    if [[ "$filter" =~ ^[0-9]+$ ]]; then
+                                        [[ "$LINES" -eq "$filter" ]] && SHOW_RESULT=false && break
+                                    elif [[ "$filter" =~ ^\<[0-9]+$ ]]; then
+                                        local val=${filter#<}
+                                        [[ "$LINES" -lt "$val" ]] && SHOW_RESULT=false && break
+                                    elif [[ "$filter" =~ ^\>[0-9]+$ ]]; then
+                                        local val=${filter#>}
+                                        [[ "$LINES" -gt "$val" ]] && SHOW_RESULT=false && break
+                                    fi
+                                done
+                                ;;
+                        esac
+                    fi
+                    if [[ "$SHOW_RESULT" == true ]]; then
+                        {
+                            flock 200
+                            printf "\033[2K\r" # Clear current line
+                            local STATUS_COLOR=$(get_status_color "$STATUS")
+                            echo -e "${INDENT}   ${GREEN}${BOLD}[+]${NC} Found: ${PROTOCOL}://${VHOST}"
+                            echo -e "${INDENT}      └─▶ IP: ${DOMAIN_IP} ${PROTOCOL}://${DOMAIN}:${port}"
+                            echo -e "${INDENT}      [${BOLD}Status: ${STATUS_COLOR}${STATUS}${NC}, ${BOLD}Size: ${BLUE}${SIZE}${NC}, ${BOLD}Words: ${YELLOW}${WORDS}${NC}, ${BOLD}Lines: ${MAGENTA}${LINES}${NC}, ${BOLD}Duration: ${CYAN}${DURATION}ms${NC}]"
+                            if [[ "$RAW_OUTPUT" == true ]]; then
+                                echo "${DOMAIN_IP}    ${VHOST}" >>"$chunk_results"
+                            else
+                                echo "${VHOST}:${port} ${PROTOCOL}://${DOMAIN}:${port} (Status: ${STATUS})" >>"$chunk_results"
+                            fi
+                        } 200>"$STATUS_FILE.lock"
+                    fi
                 fi
                 ((processed++))
                 echo "$processed" >"$progress_file"
@@ -1443,7 +1504,7 @@ VHOST_SCAN() {
     if find "$THREAD_DIR" -name "port_*_results" -type f | grep -q .; then
         cat "$THREAD_DIR"/port_*_results | sort -u >"$OUTPUT_FILE"
         FOUND_COUNT=$(wc -l <"$OUTPUT_FILE")
-        [[ "$RECURSIVE_SCAN_ENABLED" == false ]] && echo -e "\n${GREEN}${BOLD}[✓]${NC} VHOST scan complete: Found ${WHITE}${BOLD}${FOUND_COUNT}${NC} hosts"
+        [[ "$RECURSIVE_SCAN_ENABLED" == false ]] && echo -e  "${GREEN}${BOLD}[✓]${NC} VHOST scan complete: Found ${WHITE}${BOLD}${FOUND_COUNT}${NC} hosts"
     fi
     # Final cleanup
     rm -rf "$THREAD_DIR"
@@ -1477,6 +1538,12 @@ SCAN_DOMAIN() {
     [[ "$VHOST_SCAN_ENABLED" == true ]] && SCAN_MODES+="${GREEN}${BOLD}VHost(${VHOST_PORTS[@]})${NC} "
     [[ "$PATTERN_RECOGNITION_ENABLED" == true ]] && SCAN_MODES+="${GREEN}${BOLD}Pattern${NC} "
     echo -e " ${PURPLE}${BOLD}Scan Modes${NC}       │ ${SCAN_MODES:-${RED}${BOLD}None${NC}}"
+    
+    # Add filter information if VHOST scan is enabled
+    if [[ "$VHOST_SCAN_ENABLED" == true && -n "$VHOST_FILTER" ]]; then
+        echo -e " ${PURPLE}${BOLD}VHOST filter${NC}     │ ${CYAN}${BOLD}${VHOST_FILTER_TYPE}${NC}: ${YELLOW}${BOLD}${VHOST_FILTER}${NC}"
+    fi
+    
     echo -e " ${PURPLE}${BOLD}Wordlist${NC}         │ ${CYAN}${BOLD}${WORDLIST_PATH}${NC}"
     [[ "$RESOLVER_SCAN" == true ]] && echo -e " ${PURPLE}${BOLD}Resolver File${NC}    │ ${CYAN}${BOLD}$RESOLVER_FILE${NC}"
     echo -e " ${PURPLE}${BOLD}Thread Count${NC}     │ ${CYAN}${BOLD}${THREAD_COUNT}${NC}"
@@ -1802,29 +1869,38 @@ while [[ "$#" -gt 0 ]]; do
         ;;
     --vhost-port)
         IS_EMPTY "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Port list missing${NC}\n" && LOG "ERROR" "Port list missing" && exit 1
-        # Convert comma-separated ports to array and validate with duplicate check
-        declare -A PORT_CHECK # Associate array for duplicate checking
-        VHOST_PORTS=()        # Reset VHOST_PORTS array
-
-        IFS=',' read -ra TEMP_PORTS <<<"$2"
-        for port in "${TEMP_PORTS[@]}"; do
-            # Validate port number
+        # Remove duplicate ports using sort -u
+        VHOST_PORTS=($(echo "$2" | tr ',' '\n' | sort -un | tr '\n' ' '))
+        # Validate ports
+        for port in "${VHOST_PORTS[@]}"; do
             if ! [[ "$port" =~ ^[0-9]+$ ]] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
                 echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Invalid port number: $port${NC}\n"
                 LOG "ERROR" "Invalid port number: $port"
                 exit 1
             fi
-
-            # Check for duplicates
-            if [[ ${PORT_CHECK[$port]} ]]; then
-                LOG "WARNING" "Duplicate port $port ignored"
-                continue
-            fi
-
-            # Add to arrays
-            PORT_CHECK[$port]=1
-            VHOST_PORTS+=("$port")
         done
+        LOG "DEBUG" "Using unique ports: ${VHOST_PORTS[*]}"
+        shift
+        ;;
+    --vhost-filter)
+        IS_EMPTY "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Filter argument missing${NC}\n" && LOG "ERROR" "Filter argument missing" && exit 1
+        # Remove duplicate filters
+        VHOST_FILTER=$(echo "$2" | tr ',' '\n' | sort -u | tr '\n' ',' | sed 's/,$//')
+        LOG "DEBUG" "Using unique filters: $VHOST_FILTER"
+        shift
+        ;;
+    --vhost-filter-type)
+        IS_EMPTY "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Filter type argument missing${NC}\n" && LOG "ERROR" "Filter type argument missing" && exit 1
+        case "${2,,}" in
+            "status"|"size"|"words"|"lines")
+                VHOST_FILTER_TYPE="$2"
+                ;;
+            *)
+                echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Invalid filter type. Use: status, size, words, or lines${NC}\n"
+                LOG "ERROR" "Invalid filter type: $2"
+                exit 1
+                ;;
+        esac
         shift
         ;;
     -t | --threads)

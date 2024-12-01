@@ -61,6 +61,10 @@ declare -r WHITE='\033[1;37m'
 declare -g CLEANUP_DONE=false
 declare -g INTERRUPT_RECEIVED=false
 
+# Response filtering
+declare -g VHOST_FILTER=""
+declare -g VHOST_FILTER_TYPE="status" # status, size, words, lines
+
 # Thread count
 declare -g THREAD_COUNT=10
 
