@@ -66,3 +66,6 @@ declare -g THREAD_COUNT=10
 
 # GitHub repository URL
 declare -g REPO_URL="https://raw.githubusercontent.com/ErvisTusha/deepdns/main/deepdns.sh"
+
+# Raw output flag
+declare -g RAW_OUTPUT=false

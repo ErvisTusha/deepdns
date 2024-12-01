@@ -62,6 +62,8 @@ declare -g INTERRUPT_RECEIVED=false
 declare -g THREAD_COUNT=10
 # GitHub repository URL
 declare -g REPO_URL="https://raw.githubusercontent.com/ErvisTusha/deepdns/main/deepdns.sh"
+# Raw output flag
+declare -g RAW_OUTPUT=false
 
 
 # From core.sh
@@ -1109,12 +1111,10 @@ VHOST_WILDCARD_DETECTION() {
     local INDENT="$4"
     local ATTEMPTS=3
     local WILDCARD_DETECTED=false
-    
     local PROTOCOL=$(DETECT_PROTOCOL "${DOMAIN_IP}" "${PORT}")
     LOG "DEBUG" "Starting VHOST wildcard detection for $DOMAIN on $PROTOCOL://$DOMAIN_IP:$PORT"
     for ATTEMPT in $(seq 1 $ATTEMPTS); do
         local RANDOM_VHOST="wildcard-$(openssl rand -hex 10).${DOMAIN}"
-        
         # Get baseline response with random vhost
         local RESPONSE=$(curl -s -I \
             --connect-timeout 3 \
@@ -1123,7 +1123,6 @@ VHOST_WILDCARD_DETECTION() {
             -H "Host: ${RANDOM_VHOST}" \
             "${PROTOCOL}://${DOMAIN_IP}:${PORT}" 2>/dev/null)
         local STATUS=$(echo "$RESPONSE" | grep -E "^HTTP" | cut -d' ' -f2)
-        
         # If we get a successful response (200 or 300s) for a random hostname, it's likely a wildcard
         if [[ "$STATUS" =~ ^(200|30[0-9])$ ]]; then
             WILDCARD_DETECTED=true
@@ -1317,13 +1316,12 @@ VHOST_SCAN() {
     #if domain is still not resolved, skip the chunk
     if [ -z "$DOMAIN_IP" ]; then
         LOG "ERROR" "Failed to resolve domain: $DOMAIN"
-        echo -e "${RED}[ERROR]${NC} Failed to resolve domain: $DOMAIN"
+        echo -e "${INDENT}${RED}[ERROR]${NC} Failed to resolve domain: $DOMAIN"
         return 1
     fi
     # Check for wildcards before scanning each port
     for PORT in "${VHOST_PORTS[@]}"; do
         echo -e "${INDENT}${YELLOW}${BOLD}[*]${NC} Starting scan on port ${WHITE}${BOLD}$PORT${NC}"
-        
         VHOST_WILDCARD_DETECTION "$DOMAIN" "$DOMAIN_IP" "$PORT" "$INDENT"
         COMMAND_STATUS=$?
         if [ $COMMAND_STATUS == 2 ]; then
@@ -1338,7 +1336,6 @@ VHOST_SCAN() {
             local chunk_size=$(wc -l <"$chunk")
             local progress_file="$THREAD_DIR/progress_$(basename "$chunk")_${port}"
             echo "0" >"$progress_file"
-            
             # Determine protocol based on port
             local PROTOCOL="http"
             local PROTOCOL=$(DETECT_PROTOCOL "${DOMAIN_IP}" "${port}")
@@ -1346,12 +1343,12 @@ VHOST_SCAN() {
             get_status_color() {
                 local status=$1
                 case $status in
-                    200) echo "${GREEN}" ;;      # Success
-                    301|302|307|308) echo "${BLUE}" ;;  # Redirects
-                    401|403) echo "${YELLOW}" ;; # Auth required/Forbidden
-                    404) echo "${RED}" ;;        # Not Found
-                    500|502|503|504) echo "${MAGENTA}" ;; # Server Errors
-                    *) echo "${WHITE}" ;;        # Other codes
+                200) echo "${GREEN}" ;;                     # Success
+                301 | 302 | 307 | 308) echo "${BLUE}" ;;    # Redirects
+                401 | 403) echo "${YELLOW}" ;;              # Auth required/Forbidden
+                404) echo "${RED}" ;;                       # Not Found
+                500 | 502 | 503 | 504) echo "${MAGENTA}" ;; # Server Errors
+                *) echo "${WHITE}" ;;                       # Other codes
                 esac
             }
             while IFS= read -r SUBDOMAIN; do
@@ -1374,7 +1371,7 @@ VHOST_SCAN() {
                 local SIZE=$(echo "$RESPONSE" | grep -E "^Content-Length" | cut -d' ' -f2 | awk '{print int($1)}')
                 local WORDS=$(echo "$RESPONSE" | wc -w)
                 local LINES=$(echo "$RESPONSE" | wc -l)
-                local DURATION=$(( (END_TIME - START_TIME) / 1000000 ))
+                local DURATION=$(((END_TIME - START_TIME) / 1000000))
                 if [[ "$STATUS" =~ ^(200|30[0-9])$ ]]; then
                     {
                         flock 200
@@ -1383,7 +1380,11 @@ VHOST_SCAN() {
                         echo -e "${INDENT}   ${GREEN}${BOLD}[+]${NC} Found: ${PROTOCOL}://${VHOST}"
                         echo -e "${INDENT}      └─▶ IP: ${DOMAIN_IP} ${PROTOCOL}://${DOMAIN}:${port}"
                         echo -e "${INDENT}      [${BOLD}Status: ${STATUS_COLOR}${STATUS}${NC}, ${BOLD}Size: ${BLUE}${SIZE}${NC}, ${BOLD}Words: ${YELLOW}${WORDS}${NC}, ${BOLD}Lines: ${MAGENTA}${LINES}${NC}, ${BOLD}Duration: ${CYAN}${DURATION}ms${NC}]"
-                        echo "${VHOST}:${port} ${PROTOCOL}://${DOMAIN}:${port} (Status: ${STATUS})" >>"$chunk_results"
+                        if [[ "$RAW_OUTPUT" == true ]]; then
+                            echo "${DOMAIN_IP}    ${VHOST}" >>"$chunk_results"
+                        else
+                            echo "${VHOST}:${port} ${PROTOCOL}://${DOMAIN}:${port} (Status: ${STATUS})" >>"$chunk_results"
+                        fi
                     } 200>"$STATUS_FILE.lock"
                 fi
                 ((processed++))
@@ -1497,17 +1498,37 @@ SCAN_DOMAIN() {
     local ACTIVE_OUT="$TEMP_DIR/${TARGET_DOMAIN}_active_tmp.txt"
     local VHOST_OUT="$TEMP_DIR/${TARGET_DOMAIN}_vhost_tmp.txt"
     local PATTERN_OUT="$TEMP_DIR/${TARGET_DOMAIN}_pattern_tmp.txt"
+    local FINAL_TMP="$TEMP_DIR/${TARGET_DOMAIN}_final_tmp.txt"
     if [[ "$RECURSIVE_SCAN" == true ]]; then
         echo -e "\n${CYAN}${BOLD}[RECURSIVE SCAN]${NC} Starting recursive enumeration (depth: $RECURSIVE_DEPTH)"
-        RECURSIVE_SCAN "$TARGET_DOMAIN" "$RECURSIVE_DEPTH" "$OUTPUT"
+        RECURSIVE_SCAN "$TARGET_DOMAIN" "$RECURSIVE_DEPTH" "$FINAL_TMP"
     else
         [[ "$PASSIVE_SCAN_ENABLED" == true ]] && PASSIVE_SCAN "$TARGET_DOMAIN" "$PASSIVE_OUT"
         [[ "$ACTIVE_SCAN_ENABLED" == true ]] && ACTIVE_SCAN "$TARGET_DOMAIN" "$ACTIVE_OUT"
         [[ "$VHOST_SCAN_ENABLED" == true ]] && VHOST_SCAN "$TARGET_DOMAIN" "$VHOST_OUT"
         [[ "$PATTERN_RECOGNITION_ENABLED" == true ]] && DNS_PATTERN_RECOGNITION "$TARGET_DOMAIN" "$PATTERN_OUT"
-        cat "$TEMP_DIR/${TARGET_DOMAIN}"_*_tmp.txt 2>/dev/null | sort -u >"$OUTPUT"
-        rm -f "$TEMP_DIR/${TARGET_DOMAIN}"_*_tmp.txt
+        cat "$TEMP_DIR/${TARGET_DOMAIN}"_*_tmp.txt 2>/dev/null | sort -u >"$FINAL_TMP"
     fi
+    # Check if output file exists and prompt for overwrite
+    if [[ -f "$OUTPUT" ]]; then
+        echo -e "${YELLOW}${BOLD}[!]${NC} Output file exists: ${CYAN}${BOLD}$OUTPUT${NC}"
+        while true; do
+            echo -n -e "${YELLOW}${BOLD}[?]${NC} Overwrite? [${GREEN}${BOLD}y${NC}/${RED}${BOLD}N${NC}] "
+            read -r REPLY
+            if [[ "$REPLY" =~ ^[Yy]$ ]]; then
+                echo -e "${GREEN}${BOLD}[✓]${NC} Overwriting existing file"
+                mv "$FINAL_TMP" "$OUTPUT"
+                break
+            elif [[ "$REPLY" =~ ^[Nn]$ ]] || [[ -z "$REPLY" ]]; then
+                echo -e "${RED}${BOLD}[!]${NC} Keeping existing file"
+                rm -f "$FINAL_TMP"
+                break
+            fi
+        done
+    else
+        mv "$FINAL_TMP" "$OUTPUT"
+    fi
+    rm -f "$TEMP_DIR/${TARGET_DOMAIN}"_*_tmp.txt
     echo -e "\n${BLUE}${BOLD}[»]${NC} ${UNDERLINE}Scan Completed${NC}"
     LOG "DEBUG" "SCAN_DOMAIN completed for target: $TARGET_DOMAIN"
     return 0
@@ -1518,18 +1539,31 @@ FORMAT_RESULTS() {
     local TEMP_FILE="$TEMP_DIR/format_temp.txt"
     local TEMP_MERGED="$TEMP_DIR/format_merged.txt"
     LOG "INFO" "Formatting results for $DOMAIN"
-    find "${DEFAULT_OUTPUT_DIR}" -type f -name "${DOMAIN}_*.txt" -exec cat {} + >"$TEMP_MERGED"
-    if [[ -s "$TEMP_MERGED" ]] || [[ -s "$OUTPUT_FILE" ]]; then
-        cat "$TEMP_MERGED" "$OUTPUT_FILE" 2>/dev/null |
-            grep -Eh "^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$" |
-            sort -u |
-            grep -v "^$DOMAIN$" >"$TEMP_FILE"
-        mv "$TEMP_FILE" "$OUTPUT_FILE"
-        local TOTAL=$(wc -l <"$OUTPUT_FILE")
-        LOG "INFO" "Saved $TOTAL unique domains to $OUTPUT_FILE"
+    if [[ "$RAW_OUTPUT" == true ]]; then
+        # For raw output, directly use collected results without extra processing
+        if [[ -s "$OUTPUT_FILE" ]]; then
+            sort -u "$OUTPUT_FILE" > "$TEMP_FILE"
+            mv "$TEMP_FILE" "$OUTPUT_FILE"
+            local TOTAL=$(wc -l < "$OUTPUT_FILE")
+            LOG "INFO" "Saved $TOTAL raw entries to $OUTPUT_FILE"
+        else
+            LOG "WARNING" "No results found for $DOMAIN"
+            TOTAL=0
+        fi
     else
-        LOG "WARNING" "No results found for $DOMAIN"
-        TOTAL=0
+        find "${DEFAULT_OUTPUT_DIR}" -type f -name "${DOMAIN}_*.txt" -exec cat {} + >"$TEMP_MERGED"
+        if [[ -s "$TEMP_MERGED" ]] || [[ -s "$OUTPUT_FILE" ]]; then
+            cat "$TEMP_MERGED" "$OUTPUT_FILE" 2>/dev/null |
+                grep -Eh "^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$" |
+                sort -u |
+                grep -v "^$DOMAIN$" >"$TEMP_FILE"
+            mv "$TEMP_FILE" "$OUTPUT_FILE"
+            local TOTAL=$(wc -l <"$OUTPUT_FILE")
+            LOG "INFO" "Saved $TOTAL unique domains to $OUTPUT_FILE"
+        else
+            LOG "WARNING" "No results found for $DOMAIN"
+            TOTAL=0
+        fi
     fi
     END_TIME=$(date +%s)
     DURATION=$((END_TIME - START_TIME))
@@ -1805,6 +1839,9 @@ while [[ "$#" -gt 0 ]]; do
         fi
         shift
         ;;
+    --raw)
+        RAW_OUTPUT=true
+        ;;
     *)
         ! VALIDATE_DOMAIN "$1" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Invalid domain: $1${NC}\n" && LOG "ERROR" "Invalid domain: $1" && exit 1
         DOMAIN="$1"
@@ -1843,23 +1880,6 @@ if [[ -n "$DOMAIN" ]]; then
         echo -e "\n${RED}${BOLD}[ERROR]${NC} Scan failed for domain: $DOMAIN"
         exit 1
     }
-fi
-
-OUTPUT="${OUTPUT:-$PWD/${DOMAIN}.txt}"
-
-if [[ -f "$OUTPUT" ]]; then
-    echo -e "${YELLOW}${BOLD}[!]${NC} Output file exists: ${CYAN}${BOLD}$OUTPUT${NC}"
-    while true; do
-        echo -n -e "${YELLOW}${BOLD}[?]${NC} Overwrite? [${GREEN}${BOLD}y${NC}/${RED}${BOLD}N${NC}] "
-        read -r REPLY
-        if [[ "$REPLY" =~ ^[Yy]$ ]]; then
-            echo -e "${GREEN}${BOLD}[✓]${NC} Overwriting existing file"
-            break
-        elif [[ "$REPLY" =~ ^[Nn]$ ]] || [[ -z "$REPLY" ]]; then
-            echo -e "${RED}${BOLD}[!]${NC} Aborting scan"
-            exit 1
-        fi
-    done
 fi
 
 FORMAT_RESULTS "$DOMAIN" "$OUTPUT"

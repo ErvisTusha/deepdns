@@ -58,19 +58,41 @@ SCAN_DOMAIN() {
     local ACTIVE_OUT="$TEMP_DIR/${TARGET_DOMAIN}_active_tmp.txt"
     local VHOST_OUT="$TEMP_DIR/${TARGET_DOMAIN}_vhost_tmp.txt"
     local PATTERN_OUT="$TEMP_DIR/${TARGET_DOMAIN}_pattern_tmp.txt"
+    local FINAL_TMP="$TEMP_DIR/${TARGET_DOMAIN}_final_tmp.txt"
 
     if [[ "$RECURSIVE_SCAN" == true ]]; then
         echo -e "\n${CYAN}${BOLD}[RECURSIVE SCAN]${NC} Starting recursive enumeration (depth: $RECURSIVE_DEPTH)"
-        RECURSIVE_SCAN "$TARGET_DOMAIN" "$RECURSIVE_DEPTH" "$OUTPUT"
+        RECURSIVE_SCAN "$TARGET_DOMAIN" "$RECURSIVE_DEPTH" "$FINAL_TMP"
     else
         [[ "$PASSIVE_SCAN_ENABLED" == true ]] && PASSIVE_SCAN "$TARGET_DOMAIN" "$PASSIVE_OUT"
         [[ "$ACTIVE_SCAN_ENABLED" == true ]] && ACTIVE_SCAN "$TARGET_DOMAIN" "$ACTIVE_OUT"
         [[ "$VHOST_SCAN_ENABLED" == true ]] && VHOST_SCAN "$TARGET_DOMAIN" "$VHOST_OUT"
         [[ "$PATTERN_RECOGNITION_ENABLED" == true ]] && DNS_PATTERN_RECOGNITION "$TARGET_DOMAIN" "$PATTERN_OUT"
 
-        cat "$TEMP_DIR/${TARGET_DOMAIN}"_*_tmp.txt 2>/dev/null | sort -u >"$OUTPUT"
-        rm -f "$TEMP_DIR/${TARGET_DOMAIN}"_*_tmp.txt
+        cat "$TEMP_DIR/${TARGET_DOMAIN}"_*_tmp.txt 2>/dev/null | sort -u >"$FINAL_TMP"
     fi
+
+    # Check if output file exists and prompt for overwrite
+    if [[ -f "$OUTPUT" ]]; then
+        echo -e "${YELLOW}${BOLD}[!]${NC} Output file exists: ${CYAN}${BOLD}$OUTPUT${NC}"
+        while true; do
+            echo -n -e "${YELLOW}${BOLD}[?]${NC} Overwrite? [${GREEN}${BOLD}y${NC}/${RED}${BOLD}N${NC}] "
+            read -r REPLY
+            if [[ "$REPLY" =~ ^[Yy]$ ]]; then
+                echo -e "${GREEN}${BOLD}[✓]${NC} Overwriting existing file"
+                mv "$FINAL_TMP" "$OUTPUT"
+                break
+            elif [[ "$REPLY" =~ ^[Nn]$ ]] || [[ -z "$REPLY" ]]; then
+                echo -e "${RED}${BOLD}[!]${NC} Keeping existing file"
+                rm -f "$FINAL_TMP"
+                break
+            fi
+        done
+    else
+        mv "$FINAL_TMP" "$OUTPUT"
+    fi
+
+    rm -f "$TEMP_DIR/${TARGET_DOMAIN}"_*_tmp.txt
 
     echo -e "\n${BLUE}${BOLD}[»]${NC} ${UNDERLINE}Scan Completed${NC}"
     LOG "DEBUG" "SCAN_DOMAIN completed for target: $TARGET_DOMAIN"
@@ -85,21 +107,34 @@ FORMAT_RESULTS() {
 
     LOG "INFO" "Formatting results for $DOMAIN"
 
-    find "${DEFAULT_OUTPUT_DIR}" -type f -name "${DOMAIN}_*.txt" -exec cat {} + >"$TEMP_MERGED"
-
-    if [[ -s "$TEMP_MERGED" ]] || [[ -s "$OUTPUT_FILE" ]]; then
-        cat "$TEMP_MERGED" "$OUTPUT_FILE" 2>/dev/null |
-            grep -Eh "^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$" |
-            sort -u |
-            grep -v "^$DOMAIN$" >"$TEMP_FILE"
-
-        mv "$TEMP_FILE" "$OUTPUT_FILE"
-
-        local TOTAL=$(wc -l <"$OUTPUT_FILE")
-        LOG "INFO" "Saved $TOTAL unique domains to $OUTPUT_FILE"
+    if [[ "$RAW_OUTPUT" == true ]]; then
+        # For raw output, directly use collected results without extra processing
+        if [[ -s "$OUTPUT_FILE" ]]; then
+            sort -u "$OUTPUT_FILE" > "$TEMP_FILE"
+            mv "$TEMP_FILE" "$OUTPUT_FILE"
+            local TOTAL=$(wc -l < "$OUTPUT_FILE")
+            LOG "INFO" "Saved $TOTAL raw entries to $OUTPUT_FILE"
+        else
+            LOG "WARNING" "No results found for $DOMAIN"
+            TOTAL=0
+        fi
     else
-        LOG "WARNING" "No results found for $DOMAIN"
-        TOTAL=0
+        find "${DEFAULT_OUTPUT_DIR}" -type f -name "${DOMAIN}_*.txt" -exec cat {} + >"$TEMP_MERGED"
+
+        if [[ -s "$TEMP_MERGED" ]] || [[ -s "$OUTPUT_FILE" ]]; then
+            cat "$TEMP_MERGED" "$OUTPUT_FILE" 2>/dev/null |
+                grep -Eh "^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$" |
+                sort -u |
+                grep -v "^$DOMAIN$" >"$TEMP_FILE"
+
+            mv "$TEMP_FILE" "$OUTPUT_FILE"
+
+            local TOTAL=$(wc -l <"$OUTPUT_FILE")
+            LOG "INFO" "Saved $TOTAL unique domains to $OUTPUT_FILE"
+        else
+            LOG "WARNING" "No results found for $DOMAIN"
+            TOTAL=0
+        fi
     fi
 
     END_TIME=$(date +%s)

@@ -814,7 +814,7 @@ DNS_PATTERN_RECOGNITION() {
     fi
     LOG "INFO" "Starting pattern recognition for $DOMAIN"
     echo -e "${INDENT}${CYAN}${BOLD}[*]${NC} ${WHITE}${BOLD}Pattern Recognition${NC} for ${YELLOW}${BOLD}$DOMAIN${NC}"
-    WILDCARD_DETECTION "$DOMAIN" "$INDENT"
+    #WILDCARD_DETECTION "$DOMAIN" "$INDENT"
     COMMAND_STATUS=$?
     LOG "DEBUG" "Wildcard detection returned status: $COMMAND_STATUS"
     if [ $COMMAND_STATUS == 2 ]; then
@@ -1278,14 +1278,6 @@ VHOST_SCAN() {
     local OUTPUT_FILE="$2"
     local FOUND_COUNT=0
     local INDENT="$3"
-    # Add wildcard detection before starting scan
-    WILDCARD_DETECTION "$DOMAIN" "$INDENT"
-    COMMAND_STATUS=$?
-    LOG "DEBUG" "Wildcard detection returned status: $COMMAND_STATUS"
-    if [ $COMMAND_STATUS == 2 ]; then
-        LOG "INFO" "Aborting VHOST scan due to wildcard detection user choice"
-        return 0
-    fi
     # Array of common browser User-Agents
     local USER_AGENTS=(
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"

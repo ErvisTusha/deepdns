@@ -1,6 +1,5 @@
 #!/bin/bash
 
-
 WILDCARD_DETECTION() {
     local DOMAIN="$1"
     local ATTEMPTS=3
@@ -50,7 +49,6 @@ WILDCARD_DETECTION() {
     fi
 }
 
-
 VHOST_WILDCARD_DETECTION() {
     local DOMAIN="$1"
     local DOMAIN_IP="$2"
@@ -58,14 +56,14 @@ VHOST_WILDCARD_DETECTION() {
     local INDENT="$4"
     local ATTEMPTS=3
     local WILDCARD_DETECTED=false
-    
+
     local PROTOCOL=$(DETECT_PROTOCOL "${DOMAIN_IP}" "${PORT}")
 
     LOG "DEBUG" "Starting VHOST wildcard detection for $DOMAIN on $PROTOCOL://$DOMAIN_IP:$PORT"
 
     for ATTEMPT in $(seq 1 $ATTEMPTS); do
         local RANDOM_VHOST="wildcard-$(openssl rand -hex 10).${DOMAIN}"
-        
+
         # Get baseline response with random vhost
         local RESPONSE=$(curl -s -I \
             --connect-timeout 3 \
@@ -75,7 +73,7 @@ VHOST_WILDCARD_DETECTION() {
             "${PROTOCOL}://${DOMAIN_IP}:${PORT}" 2>/dev/null)
 
         local STATUS=$(echo "$RESPONSE" | grep -E "^HTTP" | cut -d' ' -f2)
-        
+
         # If we get a successful response (200 or 300s) for a random hostname, it's likely a wildcard
         if [[ "$STATUS" =~ ^(200|30[0-9])$ ]]; then
             WILDCARD_DETECTED=true
@@ -105,7 +103,6 @@ VHOST_WILDCARD_DETECTION() {
         return 0
     fi
 }
-
 
 ACTIVE_SCAN() {
     local DOMAIN="$1"
@@ -253,7 +250,6 @@ ACTIVE_SCAN() {
     return 0
 }
 
-
 VHOST_SCAN() {
     local DOMAIN="$1"
     local OUTPUT_FILE="$2"
@@ -305,14 +301,14 @@ VHOST_SCAN() {
     #if domain is still not resolved, skip the chunk
     if [ -z "$DOMAIN_IP" ]; then
         LOG "ERROR" "Failed to resolve domain: $DOMAIN"
-        echo -e "${RED}[ERROR]${NC} Failed to resolve domain: $DOMAIN"
+        echo -e "${INDENT}${RED}[ERROR]${NC} Failed to resolve domain: $DOMAIN"
         return 1
     fi
 
     # Check for wildcards before scanning each port
     for PORT in "${VHOST_PORTS[@]}"; do
         echo -e "${INDENT}${YELLOW}${BOLD}[*]${NC} Starting scan on port ${WHITE}${BOLD}$PORT${NC}"
-        
+
         VHOST_WILDCARD_DETECTION "$DOMAIN" "$DOMAIN_IP" "$PORT" "$INDENT"
         COMMAND_STATUS=$?
         if [ $COMMAND_STATUS == 2 ]; then
@@ -328,7 +324,6 @@ VHOST_SCAN() {
             local chunk_size=$(wc -l <"$chunk")
             local progress_file="$THREAD_DIR/progress_$(basename "$chunk")_${port}"
             echo "0" >"$progress_file"
-            
 
             # Determine protocol based on port
             local PROTOCOL="http"
@@ -338,12 +333,12 @@ VHOST_SCAN() {
             get_status_color() {
                 local status=$1
                 case $status in
-                    200) echo "${GREEN}" ;;      # Success
-                    301|302|307|308) echo "${BLUE}" ;;  # Redirects
-                    401|403) echo "${YELLOW}" ;; # Auth required/Forbidden
-                    404) echo "${RED}" ;;        # Not Found
-                    500|502|503|504) echo "${MAGENTA}" ;; # Server Errors
-                    *) echo "${WHITE}" ;;        # Other codes
+                200) echo "${GREEN}" ;;                     # Success
+                301 | 302 | 307 | 308) echo "${BLUE}" ;;    # Redirects
+                401 | 403) echo "${YELLOW}" ;;              # Auth required/Forbidden
+                404) echo "${RED}" ;;                       # Not Found
+                500 | 502 | 503 | 504) echo "${MAGENTA}" ;; # Server Errors
+                *) echo "${WHITE}" ;;                       # Other codes
                 esac
             }
 
@@ -371,18 +366,23 @@ VHOST_SCAN() {
                 local SIZE=$(echo "$RESPONSE" | grep -E "^Content-Length" | cut -d' ' -f2 | awk '{print int($1)}')
                 local WORDS=$(echo "$RESPONSE" | wc -w)
                 local LINES=$(echo "$RESPONSE" | wc -l)
-                local DURATION=$(( (END_TIME - START_TIME) / 1000000 ))
+                local DURATION=$(((END_TIME - START_TIME) / 1000000))
 
                 if [[ "$STATUS" =~ ^(200|30[0-9])$ ]]; then
                     {
                         flock 200
                         printf "\033[2K\r" # Clear current line
                         local STATUS_COLOR=$(get_status_color "$STATUS")
-
                         echo -e "${INDENT}   ${GREEN}${BOLD}[+]${NC} Found: ${PROTOCOL}://${VHOST}"
                         echo -e "${INDENT}      └─▶ IP: ${DOMAIN_IP} ${PROTOCOL}://${DOMAIN}:${port}"
                         echo -e "${INDENT}      [${BOLD}Status: ${STATUS_COLOR}${STATUS}${NC}, ${BOLD}Size: ${BLUE}${SIZE}${NC}, ${BOLD}Words: ${YELLOW}${WORDS}${NC}, ${BOLD}Lines: ${MAGENTA}${LINES}${NC}, ${BOLD}Duration: ${CYAN}${DURATION}ms${NC}]"
-                        echo "${VHOST}:${port} ${PROTOCOL}://${DOMAIN}:${port} (Status: ${STATUS})" >>"$chunk_results"
+
+                        if [[ "$RAW_OUTPUT" == true ]]; then
+                            echo "${DOMAIN_IP}    ${VHOST}" >>"$chunk_results"
+                        else
+                            echo "${VHOST}:${port} ${PROTOCOL}://${DOMAIN}:${port} (Status: ${STATUS})" >>"$chunk_results"
+                        fi
+
                     } 200>"$STATUS_FILE.lock"
                 fi
 

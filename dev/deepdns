@@ -190,6 +190,9 @@ while [[ "$#" -gt 0 ]]; do
         fi
         shift
         ;;
+    --raw)
+        RAW_OUTPUT=true
+        ;;
     *)
         ! VALIDATE_DOMAIN "$1" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Invalid domain: $1${NC}\n" && LOG "ERROR" "Invalid domain: $1" && exit 1
         DOMAIN="$1"
@@ -228,23 +231,6 @@ if [[ -n "$DOMAIN" ]]; then
         echo -e "\n${RED}${BOLD}[ERROR]${NC} Scan failed for domain: $DOMAIN"
         exit 1
     }
-fi
-
-OUTPUT="${OUTPUT:-$PWD/${DOMAIN}.txt}"
-
-if [[ -f "$OUTPUT" ]]; then
-    echo -e "${YELLOW}${BOLD}[!]${NC} Output file exists: ${CYAN}${BOLD}$OUTPUT${NC}"
-    while true; do
-        echo -n -e "${YELLOW}${BOLD}[?]${NC} Overwrite? [${GREEN}${BOLD}y${NC}/${RED}${BOLD}N${NC}] "
-        read -r REPLY
-        if [[ "$REPLY" =~ ^[Yy]$ ]]; then
-            echo -e "${GREEN}${BOLD}[✓]${NC} Overwriting existing file"
-            break
-        elif [[ "$REPLY" =~ ^[Nn]$ ]] || [[ -z "$REPLY" ]]; then
-            echo -e "${RED}${BOLD}[!]${NC} Aborting scan"
-            exit 1
-        fi
-    done
 fi
 
 FORMAT_RESULTS "$DOMAIN" "$OUTPUT"
