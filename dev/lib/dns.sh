@@ -201,7 +201,7 @@ DNS_PATTERN_RECOGNITION() {
 
     echo -e "${INDENT}${CYAN}${BOLD}[*]${NC} ${WHITE}${BOLD}Pattern Recognition${NC} for ${YELLOW}${BOLD}$DOMAIN${NC}"
 
-    WILDCARD_DETECTION "$DOMAIN" "$INDENT"
+    #WILDCARD_DETECTION "$DOMAIN" "$INDENT"
     COMMAND_STATUS=$?
     LOG "DEBUG" "Wildcard detection returned status: $COMMAND_STATUS"
     if [ $COMMAND_STATUS == 2 ]; then

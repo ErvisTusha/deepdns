@@ -23,7 +23,7 @@ declare -g START_TIME=$(date +%s)
 declare -g TEMP_DIR=""
 declare -g VERBOSE=false
 declare -g DEBUG=false
-declare -g VERSION="y"
+declare -g VERSION="2.0.0-dev"
 declare -g AUTHOR="Ervis Tusha"
 # Default settings
 declare -g DEFAULT_RECURSIVE_DEPTH=3
@@ -814,7 +814,7 @@ DNS_PATTERN_RECOGNITION() {
     fi
     LOG "INFO" "Starting pattern recognition for $DOMAIN"
     echo -e "${INDENT}${CYAN}${BOLD}[*]${NC} ${WHITE}${BOLD}Pattern Recognition${NC} for ${YELLOW}${BOLD}$DOMAIN${NC}"
-    WILDCARD_DETECTION "$DOMAIN" "$INDENT"
+    #WILDCARD_DETECTION "$DOMAIN" "$INDENT"
     COMMAND_STATUS=$?
     LOG "DEBUG" "Wildcard detection returned status: $COMMAND_STATUS"
     if [ $COMMAND_STATUS == 2 ]; then
@@ -1060,6 +1060,97 @@ QUERY_VIRUSTOTAL() {
 
 
 # From active.sh
+WILDCARD_DETECTION() {
+    local DOMAIN="$1"
+    local ATTEMPTS=3
+    local WILDCARD_DETECTED=false
+    if [ -z "$DOMAIN" ]; then
+        echo -e "${RED}[ERROR] DOMAIN PARAMETER IS REQUIRED${NC}"
+        return 1
+    fi
+    for ATTEMPT in $(seq 1 $ATTEMPTS); do
+        local RANDOM_SUBDOMAIN="WILDCARD-$(openssl rand -hex 10)"
+        local DNS_RESULT
+        if ! DNS_RESULT=$(dig +short "$RANDOM_SUBDOMAIN.$DOMAIN" 2>/dev/null); then
+            echo -e "${RED}[ERROR] DNS QUERY FAILED FOR $RANDOM_SUBDOMAIN.$DOMAIN${NC}"
+            LOG "ERROR" "DNS QUERY FAILED FOR $RANDOM_SUBDOMAIN.$DOMAIN"
+            continue
+        fi
+        if echo "$DNS_RESULT" | grep -q '[0-9]\|CNAME'; then
+            WILDCARD_DETECTED=true
+            break
+        fi
+        sleep 1
+    done
+    if [ "$WILDCARD_DETECTED" = true ]; then
+        LOG "WARNING" "WILDCARD DNS DETECTED FOR $DOMAIN"
+        if [[ "$RECURSIVE_SCAN_ENABLED" == false ]]; then
+            echo -e "${INDENT}${YELLOW}${BOLD}[!]${NC} Wildcard DNS detected for $DOMAIN${NC}"
+            echo -e "${INDENT}${YELLOW}${BOLD}[!]${NC} This may generate false positives${NC}"
+            read -p "$(echo -e "${INDENT}${YELLOW}${BOLD}[?]${NC} Do you want to continue scanning? [y/N]: ")" CONTINUE
+        else
+            read -p "$(echo -e "${INDENT}${YELLOW}${BOLD}[!]${NC} Wildcard DNS detected, do you want to continue scanning? [y/N]: ")" CONTINUE
+        fi
+        if [[ ! "$CONTINUE" =~ ^[Yy]$ ]]; then
+            echo -e "${INDENT}${RED}${BOLD}[!]${NC} SCAN ABORTED BY USER${NC}"
+            return 2
+        fi
+        return 0
+    else
+        [[ "$RECURSIVE_SCAN_ENABLED" == false ]] && echo -e "${INDENT}${GREEN}${BOLD}[✓]${NC} No wildcard DNS detected for $DOMAIN${NC}"
+        LOG "INFO" "No wildcard DNS detected for $DOMAIN"
+        return 0
+    fi
+}
+VHOST_WILDCARD_DETECTION() {
+    local DOMAIN="$1"
+    local DOMAIN_IP="$2"
+    local PORT="$3"
+    local INDENT="$4"
+    local ATTEMPTS=3
+    local WILDCARD_DETECTED=false
+    
+    local PROTOCOL=$(DETECT_PROTOCOL "${DOMAIN_IP}" "${PORT}")
+    LOG "DEBUG" "Starting VHOST wildcard detection for $DOMAIN on $PROTOCOL://$DOMAIN_IP:$PORT"
+    for ATTEMPT in $(seq 1 $ATTEMPTS); do
+        local RANDOM_VHOST="wildcard-$(openssl rand -hex 10).${DOMAIN}"
+        
+        # Get baseline response with random vhost
+        local RESPONSE=$(curl -s -I \
+            --connect-timeout 3 \
+            --max-time 5 \
+            -k \
+            -H "Host: ${RANDOM_VHOST}" \
+            "${PROTOCOL}://${DOMAIN_IP}:${PORT}" 2>/dev/null)
+        local STATUS=$(echo "$RESPONSE" | grep -E "^HTTP" | cut -d' ' -f2)
+        
+        # If we get a successful response (200 or 300s) for a random hostname, it's likely a wildcard
+        if [[ "$STATUS" =~ ^(200|30[0-9])$ ]]; then
+            WILDCARD_DETECTED=true
+            break
+        fi
+        sleep 1
+    done
+    if [ "$WILDCARD_DETECTED" = true ]; then
+        LOG "WARNING" "VHOST WILDCARD DETECTED FOR $DOMAIN on port $PORT"
+        if [[ "$RECURSIVE_SCAN_ENABLED" == false ]]; then
+            echo -e "${INDENT}${YELLOW}${BOLD}[!]${NC} Virtual host wildcard detected for $DOMAIN on port $PORT"
+            echo -e "${INDENT}${YELLOW}${BOLD}[!]${NC} Server responds to non-existent vhosts - results may be unreliable"
+            read -p "$(echo -e "${INDENT}${YELLOW}${BOLD}[?]${NC} Do you want to continue scanning? [y/N]: ")" CONTINUE
+        else
+            read -p "$(echo -e "${INDENT}${YELLOW}${BOLD}[!]${NC} Virtual host wildcard detected, continue scanning? [y/N]: ")" CONTINUE
+        fi
+        if [[ ! "$CONTINUE" =~ ^[Yy]$ ]]; then
+            echo -e "${INDENT}${RED}${BOLD}[!]${NC} VHOST SCAN ABORTED BY USER"
+            return 2
+        fi
+        return 0
+    else
+        [[ "$RECURSIVE_SCAN_ENABLED" == false ]] && echo -e "${INDENT}${GREEN}${BOLD}[✓]${NC} No virtual host wildcard detected for $DOMAIN on port $PORT"
+        LOG "INFO" "No VHOST wildcard detected for $DOMAIN on port $PORT"
+        return 0
+    fi
+}
 ACTIVE_SCAN() {
     local DOMAIN="$1"
     local RESULTS_FILE="${2:-${OUTPUT:-$PWD/${DOMAIN}_active.txt}}"
@@ -1187,6 +1278,22 @@ VHOST_SCAN() {
     local OUTPUT_FILE="$2"
     local FOUND_COUNT=0
     local INDENT="$3"
+    # Array of common browser User-Agents
+    local USER_AGENTS=(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Safari/605.1.15"
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0"
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        "Mozilla/5.0 (X11; Linux x86_64; rv:89.0) Gecko/20100101 Firefox/89.0"
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Safari/605.1.15"
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0"
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Safari/605.1.15"
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0"
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        "Mozilla/5.0 (X11; Linux x86_64; rv:89.0) Gecko/20100101 Firefox/89.0"
+    )
     if [[ "$RECURSIVE_SCAN_ENABLED" == false ]]; then
         echo -e "\n${CYAN}${BOLD}┌──────────────────────────────────────────────────────────────────────────┐${NC}"
         echo -e "${CYAN}${BOLD}│${NC}                         ${UNDERLINE}${BOLD}Virtual Host Scan Results${NC}                        ${CYAN}${BOLD}│${NC}"
@@ -1201,45 +1308,88 @@ VHOST_SCAN() {
     local CHUNK_SIZE=$(((TOTAL_WORDS + THREAD_COUNT - 1) / THREAD_COUNT))
     LOG "DEBUG" "Splitting wordlist into chunks of size: $CHUNK_SIZE"
     split -l "$CHUNK_SIZE" "$WORDLIST_PATH" "$THREAD_DIR/chunk_"
-    PROCESS_VHOST_CHUNK() {
-        local chunk="$1"
-        local port="$2"
-        local chunk_results="$THREAD_DIR/results_$(basename "$chunk")_${port}"
-        local processed=0
-        local chunk_size=$(wc -l <"$chunk")
-        local progress_file="$THREAD_DIR/progress_$(basename "$chunk")_${port}"
-        echo "0" >"$progress_file"
-        # Get IP address of domain
-        local DOMAIN_IP=$(dig +short "${DOMAIN}" | head -n 1)
-        # Determine protocol based on port
-        local PROTOCOL="http"
-        local PROTOCOL=$(DETECT_PROTOCOL "${DOMAIN_IP}" "${port}")
-        while IFS= read -r SUBDOMAIN; do
-            local VHOST="${SUBDOMAIN}.${DOMAIN}"
-            # Use curl with connection timeout, max time and SSL options
-            local RESPONSE=$(curl -s -I \
-                --connect-timeout 3 \
-                --max-time 5 \
-                -k \
-                -H "Host: ${VHOST}" \
-                "${PROTOCOL}://${DOMAIN_IP}:${port}" 2>/dev/null)
-            local STATUS=$(echo "$RESPONSE" | grep -E "^HTTP" | cut -d' ' -f2)
-            if [[ "$STATUS" =~ ^(200|30[0-9])$ ]]; then
-                {
-                    flock 200
-                    printf "\033[2K\r" # Clear current line
-                    echo -e "${INDENT}   ${GREEN}${BOLD}[+]${NC} Found: ${VHOST}"
-                    echo -e "${INDENT}      └─▶ IP: ${DOMAIN_IP} ${PROTOCOL}://${DOMAIN}:${port} (Status: ${STATUS})"
-                    echo "${VHOST}:${port} ${PROTOCOL}://${DOMAIN}:${port} (Status: ${STATUS})" >>"$chunk_results"
-                } 200>"$STATUS_FILE.lock"
-            fi
-            ((processed++))
-            echo "$processed" >"$progress_file"
-        done <"$chunk"
-    }
-    # Process one port at a time
+    # Get IP address of domain from hosts file
+    local DOMAIN_IP=$(grep -E "^([0-9]{1,3}\.){3}[0-9]{1,3}[[:space:]]+$DOMAIN" /etc/hosts | awk '{print $1}')
+    #if domain is not found in hosts file, use dig to resolve it
+    if [ -z "$DOMAIN_IP" ]; then
+        DOMAIN_IP=$(dig +short "$DOMAIN" | head -n1)
+    fi
+    #if domain is still not resolved, skip the chunk
+    if [ -z "$DOMAIN_IP" ]; then
+        LOG "ERROR" "Failed to resolve domain: $DOMAIN"
+        echo -e "${RED}[ERROR]${NC} Failed to resolve domain: $DOMAIN"
+        return 1
+    fi
+    # Check for wildcards before scanning each port
     for PORT in "${VHOST_PORTS[@]}"; do
         echo -e "${INDENT}${YELLOW}${BOLD}[*]${NC} Starting scan on port ${WHITE}${BOLD}$PORT${NC}"
+        
+        VHOST_WILDCARD_DETECTION "$DOMAIN" "$DOMAIN_IP" "$PORT" "$INDENT"
+        COMMAND_STATUS=$?
+        if [ $COMMAND_STATUS == 2 ]; then
+            LOG "INFO" "Aborting VHOST scan on port $PORT due to wildcard detection"
+            continue
+        fi
+        PROCESS_VHOST_CHUNK() {
+            local chunk="$1"
+            local port="$2"
+            local chunk_results="$THREAD_DIR/results_$(basename "$chunk")_${port}"
+            local processed=0
+            local chunk_size=$(wc -l <"$chunk")
+            local progress_file="$THREAD_DIR/progress_$(basename "$chunk")_${port}"
+            echo "0" >"$progress_file"
+            
+            # Determine protocol based on port
+            local PROTOCOL="http"
+            local PROTOCOL=$(DETECT_PROTOCOL "${DOMAIN_IP}" "${port}")
+            # Add helper function for status colors
+            get_status_color() {
+                local status=$1
+                case $status in
+                    200) echo "${GREEN}" ;;      # Success
+                    301|302|307|308) echo "${BLUE}" ;;  # Redirects
+                    401|403) echo "${YELLOW}" ;; # Auth required/Forbidden
+                    404) echo "${RED}" ;;        # Not Found
+                    500|502|503|504) echo "${MAGENTA}" ;; # Server Errors
+                    *) echo "${WHITE}" ;;        # Other codes
+                esac
+            }
+            while IFS= read -r SUBDOMAIN; do
+                local VHOST="${SUBDOMAIN}.${DOMAIN}"
+                # Get random User-Agent
+                local RANDOM_UA=${USER_AGENTS[$RANDOM % ${#USER_AGENTS[@]}]}
+                # Start timing
+                local START_TIME=$(date +%s%N)
+                # Use curl with connection timeout, max time and SSL options
+                local RESPONSE=$(curl -s -I \
+                    --connect-timeout 3 \
+                    --max-time 5 \
+                    -k \
+                    -A "$RANDOM_UA" \
+                    -H "Host: ${VHOST}" \
+                    "${PROTOCOL}://${DOMAIN_IP}:${port}" 2>/dev/null)
+                # Calculate duration in milliseconds
+                local END_TIME=$(date +%s%N)
+                local STATUS=$(echo "$RESPONSE" | grep -E "^HTTP" | cut -d' ' -f2)
+                local SIZE=$(echo "$RESPONSE" | grep -E "^Content-Length" | cut -d' ' -f2 | awk '{print int($1)}')
+                local WORDS=$(echo "$RESPONSE" | wc -w)
+                local LINES=$(echo "$RESPONSE" | wc -l)
+                local DURATION=$(( (END_TIME - START_TIME) / 1000000 ))
+                if [[ "$STATUS" =~ ^(200|30[0-9])$ ]]; then
+                    {
+                        flock 200
+                        printf "\033[2K\r" # Clear current line
+                        local STATUS_COLOR=$(get_status_color "$STATUS")
+                        echo -e "${INDENT}   ${GREEN}${BOLD}[+]${NC} Found: ${PROTOCOL}://${VHOST}"
+                        echo -e "${INDENT}      └─▶ IP: ${DOMAIN_IP} ${PROTOCOL}://${DOMAIN}:${port}"
+                        echo -e "${INDENT}      [${BOLD}Status: ${STATUS_COLOR}${STATUS}${NC}, ${BOLD}Size: ${BLUE}${SIZE}${NC}, ${BOLD}Words: ${YELLOW}${WORDS}${NC}, ${BOLD}Lines: ${MAGENTA}${LINES}${NC}, ${BOLD}Duration: ${CYAN}${DURATION}ms${NC}]"
+                        echo "${VHOST}:${port} ${PROTOCOL}://${DOMAIN}:${port} (Status: ${STATUS})" >>"$chunk_results"
+                    } 200>"$STATUS_FILE.lock"
+                fi
+                ((processed++))
+                echo "$processed" >"$progress_file"
+            done <"$chunk"
+        }
         local pids=()
         # Launch parallel threads for current port
         for chunk in "$THREAD_DIR"/chunk_*; do
@@ -1297,48 +1447,6 @@ VHOST_SCAN() {
     # Final cleanup
     rm -rf "$THREAD_DIR"
     return 0
-}
-WILDCARD_DETECTION() {
-    local DOMAIN="$1"
-    local ATTEMPTS=3
-    local WILDCARD_DETECTED=false
-    if [ -z "$DOMAIN" ]; then
-        echo -e "${RED}[ERROR] DOMAIN PARAMETER IS REQUIRED${NC}"
-        return 1
-    fi
-    for ATTEMPT in $(seq 1 $ATTEMPTS); do
-        local RANDOM_SUBDOMAIN="WILDCARD-$(openssl rand -hex 10)"
-        local DNS_RESULT
-        if ! DNS_RESULT=$(dig +short "$RANDOM_SUBDOMAIN.$DOMAIN" 2>/dev/null); then
-            echo -e "${RED}[ERROR] DNS QUERY FAILED FOR $RANDOM_SUBDOMAIN.$DOMAIN${NC}"
-            LOG "ERROR" "DNS QUERY FAILED FOR $RANDOM_SUBDOMAIN.$DOMAIN"
-            continue
-        fi
-        if echo "$DNS_RESULT" | grep -q '[0-9]\|CNAME'; then
-            WILDCARD_DETECTED=true
-            break
-        fi
-        sleep 1
-    done
-    if [ "$WILDCARD_DETECTED" = true ]; then
-        LOG "WARNING" "WILDCARD DNS DETECTED FOR $DOMAIN"
-        if [[ "$RECURSIVE_SCAN_ENABLED" == false ]]; then
-            echo -e "${INDENT}${YELLOW}${BOLD}[!]${NC} Wildcard DNS detected for $DOMAIN${NC}"
-            echo -e "${INDENT}${YELLOW}${BOLD}[!]${NC} This may generate false positives${NC}"
-            read -p "$(echo -e "${INDENT}${YELLOW}${BOLD}[?]${NC} Do you want to continue scanning? [y/N]: ")" CONTINUE
-        else
-            read -p "$(echo -e "${INDENT}${YELLOW}${BOLD}[!]${NC} Wildcard DNS detected, do you want to continue scanning? [y/N]: ")" CONTINUE
-        fi
-        if [[ ! "$CONTINUE" =~ ^[Yy]$ ]]; then
-            echo -e "${INDENT}${RED}${BOLD}[!]${NC} SCAN ABORTED BY USER${NC}"
-            return 2
-        fi
-        return 0
-    else
-        [[ "$RECURSIVE_SCAN_ENABLED" == false ]] && echo -e "${INDENT}${GREEN}${BOLD}[✓]${NC} No wildcard DNS detected for $DOMAIN${NC}"
-        LOG "INFO" "No wildcard DNS detected for $DOMAIN"
-        return 0
-    fi
 }
 
 
