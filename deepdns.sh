@@ -1110,6 +1110,22 @@ WILDCARD_DETECTION() {
         return 0
     fi
 }
+CHECK_PORT() {
+    local IP="$1"
+    local PORT="$2"
+    local TIMEOUT=2
+    # Try with timeout and nc (netcat) first
+    if command -v nc >/dev/null 2>&1; then
+        if timeout $TIMEOUT nc -z -w1 "$IP" "$PORT" >/dev/null 2>&1; then
+            return 0
+        fi
+    fi
+    # Fallback to pure bash if nc is not available
+    if (</dev/tcp/$IP/$PORT) >/dev/null 2>&1; then
+        return 0
+    fi
+    return 1
+}
 VHOST_WILDCARD_DETECTION() {
     local DOMAIN="$1"
     local DOMAIN_IP="$2"
@@ -1325,7 +1341,29 @@ VHOST_SCAN() {
         echo -e "${INDENT}${RED}[ERROR]${NC} Failed to resolve domain: $DOMAIN"
         return 1
     fi
-    # Check for wildcards before scanning each port
+    # Check which ports are open before starting the scan
+    local OPEN_PORTS=()
+    echo -e "${INDENT}${YELLOW}${BOLD}[*]${NC} Checking for open ports..."
+    
+    for PORT in "${VHOST_PORTS[@]}"; do
+        echo -n -e "${INDENT}   ${YELLOW}${BOLD}[*]${NC} Testing port ${WHITE}${BOLD}$PORT${NC}... "
+        if CHECK_PORT "$DOMAIN_IP" "$PORT"; then
+            OPEN_PORTS+=("$PORT")
+            echo -e "${GREEN}${BOLD}OPEN${NC}"
+        else
+            echo -e "${RED}${BOLD}CLOSED${NC}"
+            LOG "INFO" "Port $PORT is closed on $DOMAIN_IP"
+        fi
+    done
+    if [ ${#OPEN_PORTS[@]} -eq 0 ]; then
+        echo -e "${INDENT}${RED}${BOLD}[!]${NC} No open ports found, skipping VHOST scan"
+        LOG "WARNING" "No open ports found for VHOST scan on $DOMAIN"
+        return 0
+    fi
+    echo -e "${INDENT}${GREEN}${BOLD}[✓]${NC} Found ${#OPEN_PORTS[@]} open ports: ${WHITE}${BOLD}${OPEN_PORTS[*]}${NC}"
+    # Replace original VHOST_PORTS with only open ports
+    VHOST_PORTS=("${OPEN_PORTS[@]}")
+    # Continue with existing VHOST scan code for open ports
     for PORT in "${VHOST_PORTS[@]}"; do
         echo -e "${INDENT}${YELLOW}${BOLD}[*]${NC} Starting scan on port ${WHITE}${BOLD}$PORT${NC}"
         VHOST_WILDCARD_DETECTION "$DOMAIN" "$DOMAIN_IP" "$PORT" "$INDENT"
