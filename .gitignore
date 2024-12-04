@@ -1,7 +1,6 @@
 .github/*
 .git
 .gitignore
-*.md
 *.log
 output/
 logs/
