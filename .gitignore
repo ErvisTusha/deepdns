@@ -1,2 +1,9 @@
 .github/*
-docker/*
+.git
+.gitignore
+*.md
+*.log
+output/
+logs/
+tests/
+docs/
