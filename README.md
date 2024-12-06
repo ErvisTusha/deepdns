@@ -1,6 +1,6 @@
 # DeepDNS
 
-[![Version](https://img.shields.io/badge/version-2.0.0-dev-blue.svg)](https://github.com/ErvisTusha/deepdns)
+[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](https://github.com/ErvisTusha/deepdns/releases)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Bash](https://img.shields.io/badge/bash-5.0%2B-orange.svg)](https://www.gnu.org/software/bash/)
 

@@ -8,52 +8,44 @@ CREATE_TEMP_DIR() {
     fi
 }
 
+# Add trap for SIGINT/SIGTERM
+trap 'CLEANUP; exit 130' SIGINT SIGTERM
+
 CLEANUP() {
     local EXIT_CODE=$?
+
+    if [[ "$CLEANUP_DONE" == "true" ]]; then
+        return $EXIT_CODE
+    fi
+    CLEANUP_DONE="true"
+
     echo -e "\n${YELLOW}${BOLD}[!]${NC} Cleaning up..."
     LOG "INFO" "Cleaning up temporary files"
 
-    if [ $EXIT_CODE -ne 0 ]; then  # Fixed syntax here - removed parentheses
+    # Kill any remaining background processes
+    jobs -p | xargs -r kill -9 2>/dev/null
+
+    if [ $EXIT_CODE -ne 0 ]; then
         echo -e "${RED}${BOLD}[!]${NC} Scan interrupted. Partial results may have been saved."
         LOG "WARNING" "Scan interrupted with exit code $EXIT_CODE"
     fi
 
-    [[ -d "$TEMP_DIR" ]] && rm -rf "$TEMP_DIR"
+    # Clean up temporary files
+    rm -rf "$THREAD_DIR" "$LOCK_DIR" 2>/dev/null
+    [[ "$RECURSIVE_SCAN_ENABLED" == false ]] && rm -f "$GLOBAL_PATTERNS_FILE" 2>/dev/null
+
+    if [[ -d "$TEMP_DIR" ]]; then
+        rm -rf "${TEMP_DIR}"/* 2>/dev/null
+        rmdir "$TEMP_DIR" 2>/dev/null
+    fi
 
     exit $EXIT_CODE
-}
-
-INTERRUPT_HANDLER() {
-    local REPLY
-    echo -e "\n${YELLOW}${BOLD}[!]${NC} Received interrupt signal"
-    LOG "WARNING" "Received interrupt signal"
-
-    echo -n -e "${YELLOW}${BOLD}[?]${NC} Do you want to continue? [${GREEN}${BOLD}y${NC}/${RED}${BOLD}N${NC}] "
-    read -r -t 5 REPLY
-
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        echo -e "${GREEN}${BOLD}[✓]${NC} Continuing scan..."
-        LOG "INFO" "User chose to continue scan"
-        return 0
-    else
-        echo -e "${RED}${BOLD}[!]${NC} Stopping scan..."
-        LOG "INFO" "User chose to stop scan"
-        CLEANUP
-    fi
-}
-
-
-# Add this function to check for interrupts (add after the functions above)
-CHECK_INTERRUPT() {
-    if [[ $INTERRUPT_RECEIVED == true ]]; then
-        exit 130
-    fi
 }
 
 LOG() {
     # Ensure DEBUG_LOG is set
     [[ -z "$DEBUG_LOG" ]] && DEBUG_LOG="$LOG_DIR/debug.log"
-    
+
     if [[ -z "$1" ]]; then
         [[ "$DEBUG" == "true" ]] && echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: LOG() no status provided" >>"$DEBUG_LOG"
         [[ "$VERBOSE" == "true" ]] && echo "ERROR: LOG() no message provided"

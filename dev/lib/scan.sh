@@ -146,8 +146,8 @@ FORMAT_RESULTS() {
     END_TIME=$(date +%s)
     DURATION=$((END_TIME - START_TIME))
     DURATION_FORMATTED=$(printf '%02dh:%02dm:%02ds' $((DURATION / 3600)) $(((DURATION % 3600) / 60)) $((DURATION % 60)))
-
-    echo -e "\n${BLUE}${BOLD}┌──────────────────────────────────────────────────────────────────────────┐${NC}"
+    echo -e "\n"
+    echo -e "${BLUE}${BOLD}┌──────────────────────────────────────────────────────────────────────────┐${NC}"
     echo -e "${BLUE}${BOLD}│${NC}                           ${UNDERLINE}Final Scan Summary${NC}                             ${BLUE}${BOLD}│${NC}"
     echo -e "${BLUE}${BOLD}└──────────────────────────────────────────────────────────────────────────┘${NC}\n"
     echo -e " ${PURPLE}${BOLD}Target Domain${NC}    │ ${YELLOW}${BOLD}$DOMAIN${NC}"

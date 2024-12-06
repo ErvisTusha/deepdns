@@ -54,15 +54,17 @@ CHECK_PORT() {
     local PORT="$2"
     local TIMEOUT=2
 
-    # Try with timeout and nc (netcat) first
+    # Try nc with shorter timeout first
     if command -v nc >/dev/null 2>&1; then
-        if timeout $TIMEOUT nc -z -w1 "$IP" "$PORT" >/dev/null 2>&1; then
+        if timeout $TIMEOUT nc -z -w1 "$IP" "$PORT" 2>/dev/null; then
             return 0
         fi
+        return 1
     fi
 
-    # Fallback to pure bash if nc is not available
-    if (</dev/tcp/$IP/$PORT) >/dev/null 2>&1; then
+    # Fallback to bash TCP test with timeout
+    # This ensures we don't hang on closed ports
+    if timeout $TIMEOUT bash -c "</dev/tcp/$IP/$PORT" 2>/dev/null; then
         return 0
     fi
 
@@ -154,17 +156,44 @@ ACTIVE_SCAN() {
         local TOTAL_WORDS=$(wc -l <"$WORDLIST_PATH")
         LOG "DEBUG" "Using wordlist: $WORDLIST_PATH with $TOTAL_WORDS entries"
 
+        # Create thread directory with proper permissions and cleanup handler
         local THREAD_DIR="$TEMP_DIR/threads"
-        mkdir -p "$THREAD_DIR/progress" 2>/dev/null
-        LOG "DEBUG" "Created thread progress directory: $THREAD_DIR/progress"
+        local PROGRESS_DIR="$THREAD_DIR/progress"
+        
+        # Ensure directories exist with proper permissions
+        mkdir -p "$THREAD_DIR" "$PROGRESS_DIR" || {
+            LOG "ERROR" "Failed to create thread directories"
+            echo -e "${RED}${BOLD}[ERROR]${NC} Failed to create thread directories"
+            return 1
+        }
+        
+        # Ensure directories are writable
+        chmod 755 "$THREAD_DIR" "$PROGRESS_DIR" || {
+            LOG "ERROR" "Failed to set directory permissions"
+            return 1
+        }
 
+        # Create and initialize progress file with proper permissions
         local STATUS_FILE="$THREAD_DIR/progress_status"
-        echo "0" >"$STATUS_FILE"
-        LOG "DEBUG" "Initialized progress tracking file: $STATUS_FILE"
+        echo "0" >"$STATUS_FILE" || {
+            LOG "ERROR" "Failed to create progress status file"
+            return 1
+        }
+        chmod 644 "$STATUS_FILE" || {
+            LOG "ERROR" "Failed to set progress file permissions"
+            return 1
+        }
+
+        LOG "DEBUG" "Thread directories created successfully"
 
         local CHUNK_SIZE=$(((TOTAL_WORDS + THREAD_COUNT - 1) / THREAD_COUNT))
         LOG "DEBUG" "Splitting wordlist into chunks of size: $CHUNK_SIZE"
-        split -l "$CHUNK_SIZE" "$WORDLIST_PATH" "$THREAD_DIR/chunk_"
+        
+        # Create chunks with proper error handling
+        split -l "$CHUNK_SIZE" "$WORDLIST_PATH" "$THREAD_DIR/chunk_" || {
+            LOG "ERROR" "Failed to split wordlist into chunks"
+            return 1
+        }
 
         if [[ -z "$RESOLVER_FILE" ]]; then
             RESOLVERS=("1.1.1.1" "8.8.8.8" "9.9.9.9")
@@ -263,7 +292,9 @@ ACTIVE_SCAN() {
         fi
 
         LOG "DEBUG" "Cleaning up temporary thread directory: $THREAD_DIR"
-        rm -rf "$THREAD_DIR"
+        rm -rf "$THREAD_DIR" 2>/dev/null || {
+            CLEANUP
+        }
     fi
 
     LOG "DEBUG" "ACTIVE_SCAN completed for domain: $DOMAIN"
@@ -323,6 +354,17 @@ VHOST_SCAN() {
         LOG "ERROR" "Failed to resolve domain: $DOMAIN"
         echo -e "${INDENT}${RED}[ERROR]${NC} Failed to resolve domain: $DOMAIN"
         return 1
+    fi
+
+    # Make sure VHOST_PORTS is reset to original ports for each new domain
+    if [[ "$RECURSIVE_SCAN_ENABLED" == true ]]; then
+        # Store original ports array
+        if [[ -z "${ORIGINAL_VHOST_PORTS[*]}" ]]; then
+            ORIGINAL_VHOST_PORTS=("${VHOST_PORTS[@]}")
+        else
+            # Reset to original ports for new subdomain
+            VHOST_PORTS=("${ORIGINAL_VHOST_PORTS[@]}")
+        fi
     fi
 
     # Check which ports are open before starting the scan

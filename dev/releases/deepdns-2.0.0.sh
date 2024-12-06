@@ -178,7 +178,7 @@ SHOW_VERSION() {
     ██████╗  ███████╗ ███████╗ ██████╗     ██████╗  ███╗   ██╗ ███████╗
     ██╔══██╗ ██╔════╝ ██╔════╝ ██╔══██╗    ██╔══██╗ ████╗  ██║ ██╔════╝
     ██║  ██║ █████╗   █████╗   ██████╔╝    ██║  ██║ ██╔██╗ ██║ ███████╗
-    ██║  ██║ ██╔══╝   ██╔══╝   ██╔═══╝     ██║  ██║ ██║╚██╗██║ ╚════██║
+    ██║  ██║ ██╔═��╝   ██╔══╝   █��╔═══╝     ██║  ██║ ██║╚██╗██║ ╚════██║
     ██████╔╝ ███████╗ ███████╗ ██║         ██████╔╝ ██║ ╚████║ ███████║
     ╚═════╝  ╚══════╝ ╚══════╝ ╚═╝         ╚═════╝  ╚═╝  ╚═══╝ ╚══════╝${NC}"
     echo -e "\n\n${GREEN}${BOLD}    DeepDNS${NC} v${YELLOW}${VERSION}${NC} - ${CYAN}${BOLD}Advanced DNS Enumeration Tool${NC}    ${GREEN}${BOLD}From:${NC} ${RED}${BOLD}${AUTHOR}${NC}
@@ -570,8 +570,7 @@ CLEAN_RESOLVERS() {
         LOG "ERROR" "Resolver file not found: $INPUT_FILE"
         return 1
     fi
-    echo -e "\n"
-    echo -e "${CYAN}${BOLD}┌──────────────────────────────────────────────────────────────────────────┐${NC}"
+    echo -e "\n${CYAN}${BOLD}┌──────────────────────────────────────────────────────────────────────────┐${NC}"
     echo -e "${CYAN}${BOLD}│${NC}                           ${UNDERLINE}${BOLD}Resolver Validation${NC}                            ${CYAN}${BOLD}│${NC}"
     echo -e "${CYAN}${BOLD}└──────────────────────────────────────────────────────────────────────────┘${NC}"
     echo -e "\n${YELLOW}${BOLD}[*]${NC} Cleaning and validating resolvers..."
@@ -1146,7 +1145,7 @@ WILDCARD_DETECTION() {
 CHECK_PORT() {
     local IP="$1"
     local PORT="$2"
-    local TIMEOUT=2
+    local TIMEOUT=2  # Reduced from 2 to 1 second
     # Try nc with shorter timeout first
     if command -v nc >/dev/null 2>&1; then
         if timeout $TIMEOUT nc -z -w1 "$IP" "$PORT" 2>/dev/null; then
@@ -1216,7 +1215,7 @@ ACTIVE_SCAN() {
     LOG "DEBUG" "Using indent level: $INDENT"
     if [[ "$RECURSIVE_SCAN_ENABLED" == false ]]; then
         echo
-        echo -e "${CYAN}${BOLD}┌──────────────────────────────────────────────────────────────────────────┐${NC}"
+        echo -e "${CYAN}${BOLD}┌────────────────────────────────────────────────────────────���─────────────┐${NC}"
         echo -e "${CYAN}${BOLD}│${NC}                           ${UNDERLINE}Active Scan Results${NC}                            ${CYAN}${BOLD}│${NC}"
         echo -e "${CYAN}${BOLD}└──────────────────────────────────────────────────────────────────────────┘${NC}\n"
         echo -e "\n${CYAN}${BOLD}[ACTIVE SCAN]${NC} Starting active enumeration for $DOMAIN using $THREAD_COUNT threads"
@@ -1749,8 +1748,7 @@ FORMAT_RESULTS() {
     END_TIME=$(date +%s)
     DURATION=$((END_TIME - START_TIME))
     DURATION_FORMATTED=$(printf '%02dh:%02dm:%02ds' $((DURATION / 3600)) $(((DURATION % 3600) / 60)) $((DURATION % 60)))
-    echo -e "\n"
-    echo -e "${BLUE}${BOLD}┌──────────────────────────────────────────────────────────────────────────┐${NC}"
+    echo -e "\n${BLUE}${BOLD}┌──────────────────────────────────────────────────────────────────────────┐${NC}"
     echo -e "${BLUE}${BOLD}│${NC}                           ${UNDERLINE}Final Scan Summary${NC}                             ${BLUE}${BOLD}│${NC}"
     echo -e "${BLUE}${BOLD}└──────────────────────────────────────────────────────────────────────────┘${NC}\n"
     echo -e " ${PURPLE}${BOLD}Target Domain${NC}    │ ${YELLOW}${BOLD}$DOMAIN${NC}"

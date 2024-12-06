@@ -1,5 +1,23 @@
 #!/bin/bash
 
+
+VALIDATE_IP() {
+    local IP="$1"
+    if [[ ! "$IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        return 1
+    fi
+
+    # Check each octet
+    local IFS='.'
+    read -ra OCTETS <<<"$IP"
+    for OCTET in "${OCTETS[@]}"; do
+        if [[ "$OCTET" -lt 0 || "$OCTET" -gt 255 ]]; then
+            return 1
+        fi
+    done
+    return 0
+}
+
 VALIDATE_DOMAIN() {
     LOG "DEBUG" "Starting VALIDATE_DOMAIN with input: $1"
     if ! [[ "$1" =~ ^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
@@ -28,13 +46,12 @@ VALIDATE_API_KEY() {
 
 CLEAN_WORDLIST() {
     local INPUT_FILE="$1"
-    local THREAD_COUNT="${2:-10}"
+    #local THREAD_COUNT="${2:-10}"
     local TOTAL_COUNT=0
     local WORKING_COUNT=0
     local THREAD_DIR="$TEMP_DIR/wordlist_threads"
     local PROGRESS_FILE="$THREAD_DIR/progress"
     local CLEAN_FILE="$TEMP_DIR/clean_wordlist.txt"
-
 
     #if ACTIVE_SCAN_ENABLED and VHOST_SCAN_ENABLED are false, skip wordlist validation
     if [[ "$ACTIVE_SCAN_ENABLED" == false ]] && [[ "$VHOST_SCAN_ENABLED" == false ]]; then
@@ -52,8 +69,8 @@ CLEAN_WORDLIST() {
         echo -e "${RED}${BOLD}[ERROR]${NC} Wordlist file not found: $INPUT_FILE"
         exit 1
     fi
-
-    echo -e "\n${CYAN}${BOLD}┌──────────────────────────────────────────────────────────────────────────┐${NC}"
+    echo -e "\n"
+    echo -e "${CYAN}${BOLD}┌──────────────────────────────────────────────────────────────────────────┐${NC}"
     echo -e "${CYAN}${BOLD}│${NC}                           ${UNDERLINE}${BOLD}Wordlist Validation${NC}                            ${CYAN}${BOLD}│${NC}"
     echo -e "${CYAN}${BOLD}└──────────────────────────────────────────────────────────────────────────┘${NC}"
 
@@ -164,7 +181,7 @@ CLEAN_RESOLVERS() {
     local TIMEOUT=2
     local WORKING_COUNT=0
     local TOTAL_COUNT=0
-    local THREAD_COUNT=50
+    #local THREAD_COUNT=50
 
     #if ACTIVE_SCAN_ENABLED and PATTERN_RECOGNITION_ENABLED are false, skip resolver validation
     if [[ "$ACTIVE_SCAN_ENABLED" == false ]] && [[ "$PATTERN_RECOGNITION_ENABLED" == false ]]; then
@@ -181,8 +198,8 @@ CLEAN_RESOLVERS() {
         LOG "ERROR" "Resolver file not found: $INPUT_FILE"
         return 1
     fi
-
-    echo -e "\n${CYAN}${BOLD}┌──────────────────────────────────────────────────────────────────────────┐${NC}"
+    echo -e "\n"
+    echo -e "${CYAN}${BOLD}┌──────────────────────────────────────────────────────────────────────────┐${NC}"
     echo -e "${CYAN}${BOLD}│${NC}                           ${UNDERLINE}${BOLD}Resolver Validation${NC}                            ${CYAN}${BOLD}│${NC}"
     echo -e "${CYAN}${BOLD}└──────────────────────────────────────────────────────────────────────────┘${NC}"
 

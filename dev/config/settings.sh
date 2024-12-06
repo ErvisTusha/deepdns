@@ -19,7 +19,7 @@ declare -g START_TIME=$(date +%s)
 declare -g TEMP_DIR=""
 declare -g VERBOSE=false
 declare -g DEBUG=false
-declare -g VERSION="2.0.0-dev"
+declare -g VERSION="2.0.0"
 declare -g AUTHOR="Ervis Tusha"
 
 # Default settings
@@ -73,3 +73,8 @@ declare -g REPO_URL="https://raw.githubusercontent.com/ErvisTusha/deepdns/main/d
 
 # Raw output flag
 declare -g RAW_OUTPUT=false
+
+
+declare -g CLEANUP_DONE="false"
+declare -g INTERRUPT_RECEIVED="false"
+declare -g PATTERN_SCAN_CLEANED="false"

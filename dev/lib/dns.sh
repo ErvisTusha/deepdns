@@ -86,24 +86,6 @@ CHECK_SUBDOMAIN() {
 
     local RESOLVER=$(SELECT_RESOLVER)
 
-    # Function to validate IP address format
-    VALIDATE_IP() {
-        local IP="$1"
-        if [[ ! "$IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            return 1
-        fi
-
-        # Check each octet
-        local IFS='.'
-        read -ra OCTETS <<<"$IP"
-        for OCTET in "${OCTETS[@]}"; do
-            if [[ "$OCTET" -lt 0 || "$OCTET" -gt 255 ]]; then
-                return 1
-            fi
-        done
-        return 0
-    }
-
     while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
         # Check with dig
         local DIG_RESULT
@@ -150,8 +132,37 @@ DNS_PATTERN_RECOGNITION() {
     local FOUND_COUNT=0
     local RESULTS_FILE="$TEMP_DIR/pattern_results.txt"
     local THREAD_DIR="$TEMP_DIR/pattern_threads"
+    local LOCK_DIR="$THREAD_DIR/locks"
     local PROGRESS_FILE="$THREAD_DIR/progress"
-    local TOTAL_PATTERNS=0
+    local LOCK_FILE="$LOCK_DIR/progress.lock"
+    
+    # Create required directories first
+    for dir in "$THREAD_DIR" "$LOCK_DIR"; do
+        if ! mkdir -p "$dir"; then
+            LOG "ERROR" "Failed to create directory: $dir"
+            return 1
+        fi
+    done
+
+    # Create and initialize required files with proper permissions
+    for file in "$PROGRESS_FILE" "$LOCK_FILE"; do
+        if ! touch "$file" 2>/dev/null || ! chmod 644 "$file" 2>/dev/null; then
+            LOG "ERROR" "Failed to create/set permissions for file: $file"
+            return 1
+        fi
+    done
+
+    # Ensure progress file exists
+    touch "$PROGRESS_FILE" || {
+        LOG "ERROR" "Failed to create progress file"
+        return 1
+    }
+
+    # Create lock file if it doesn't exist
+    touch "$PROGRESS_FILE.lock" || {
+        LOG "ERROR" "Failed to create progress lock file"
+        return 1
+    }
 
     # Add tracking file for already found patterns
     local GLOBAL_PATTERNS_FILE="$TEMP_DIR/global_patterns.txt"
@@ -251,6 +262,12 @@ DNS_PATTERN_RECOGNITION() {
         local chunk_results="$THREAD_DIR/results_$(basename "$chunk")"
 
         while IFS=: read -r category pattern; do
+            # Check for interrupt before processing each pattern
+            if [[ "$INTERRUPT_RECEIVED" == "true" ]]; then
+                LOG "DEBUG" "Pattern scan interrupted in chunk processing"
+                return 1
+            fi
+
             local variations=(
                 "$pattern"
                 "${pattern}-${DOMAIN%%.*}"
@@ -264,33 +281,33 @@ DNS_PATTERN_RECOGNITION() {
             )
 
             for variant in "${variations[@]}"; do
+                if [[ "$INTERRUPT_RECEIVED" == "true" ]]; then
+                    return 1
+                fi
                 local subdomain="${variant}.$DOMAIN"
 
                 if CHECK_SUBDOMAIN "$subdomain"; then
                     {
-                        flock 200
-                        printf "\033[2K\r" # Clear current line
+                        flock -x 200
+                        printf "\033[2K\r" 
                         echo -e "${INDENT}     ${GREEN}${BOLD}[+]${NC} Found ${WHITE}${BOLD}$category${NC} pattern: ${YELLOW}${BOLD}$subdomain${NC}"
                         echo "${category}:${pattern}:${subdomain}" >>"$chunk_results"
-                    } 200>"$PROGRESS_FILE.lock"
+                    } 200>"$LOCK_FILE"
                 fi
             done
 
-            # Update progress atomically
+            # Update progress with improved lock handling
             (
-                flock 200
-                local current=$(cat "$PROGRESS_FILE")
-                echo $((current + 1)) >"$PROGRESS_FILE"
-
-                # Calculate and show progress
-                local progress=$((current * 100 / TOTAL_PATTERNS))
-                printf "\r${INDENT}${YELLOW}${BOLD}[*]${NC} Progress: [${GREEN}${BOLD}%-50s${NC}] %3d%% " \
-                    "$(printf '#%.0s' $(seq 1 $((progress / 2))))" \
-                    "$progress"
-            ) 200>"$PROGRESS_FILE.lock"
-        done < <(while read -r line; do
-            echo "${line}"
-        done <"$chunk")
+                if flock -n 200; then
+                    local current=$(cat "$PROGRESS_FILE" 2>/dev/null || echo "0")
+                    echo $((current + 1)) >"$PROGRESS_FILE"
+                    local progress=$((current * 100 / TOTAL_PATTERNS))
+                    printf "\r${INDENT}${YELLOW}${BOLD}[*]${NC} Progress: [${GREEN}${BOLD}%-50s${NC}] %3d%% " \
+                        "$(printf '#%.0s' $(seq 1 $((progress / 2))))" \
+                        "$progress"
+                fi
+            ) 200>"$LOCK_FILE"
+        done < <(cat "$chunk" 2>/dev/null || true)
     }
 
     # Launch threads
@@ -300,8 +317,13 @@ DNS_PATTERN_RECOGNITION() {
         pids+=($!)
     done
 
-    # Monitor progress - simplified to avoid multiple progress bars
+    # Monitor progress with interrupt handling
     while true; do
+        if [[ "$INTERRUPT_RECEIVED" == "true" ]]; then
+            LOG "DEBUG" "Pattern scan interrupted in progress monitoring"
+            break
+        fi
+
         local running=0
         for pid in "${pids[@]}"; do
             if kill -0 "$pid" 2>/dev/null; then
@@ -376,5 +398,9 @@ DNS_PATTERN_RECOGNITION() {
     # If this is not a recursive scan, cleanup the global patterns file
     [[ "$RECURSIVE_SCAN_ENABLED" == false ]] && rm -f "$GLOBAL_PATTERNS_FILE"
 
+    # Add cleanup trap for pattern recognition
+    trap 'rm -rf "$THREAD_DIR" "$LOCK_DIR" 2>/dev/null' EXIT
+
     return 0
 }
+
