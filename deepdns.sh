@@ -41,7 +41,7 @@ declare -g RECURSIVE_SCAN_ENABLED=false
 declare -g VHOST_SCAN_ENABLED=false
 declare -g PATTERN_RECOGNITION_ENABLED=false
 declare -g API_VALIDATION_ENABLED=true
-declare -g VHOST_PORTS=(80 443 8080 8443)
+declare -g VHOST_PORTS=(80 443)
 # Colors
 declare -r RED='\033[0;31m'
 declare -r GREEN='\033[0;32m'
@@ -81,17 +81,18 @@ CREATE_TEMP_DIR() {
     fi
 }
 # Add trap for SIGINT/SIGTERM
-trap 'CLEANUP; exit 130' SIGINT SIGTERM
+#trap 'CLEANUP; exit 130' SIGINT SIGTERM
 CLEANUP() {
     local EXIT_CODE=$?
     if [[ "$CLEANUP_DONE" == "true" ]]; then
         return $EXIT_CODE
     fi
     CLEANUP_DONE="true"
+    INTERRUPT_RECEIVED="true"
     echo -e "\n${YELLOW}${BOLD}[!]${NC} Cleaning up..."
     LOG "INFO" "Cleaning up temporary files"
-    # Kill any remaining background processes
-    jobs -p | xargs -r kill -9 2>/dev/null
+    # Kill all background processes
+    pkill -P $$
     if [ $EXIT_CODE -ne 0 ]; then
         echo -e "${RED}${BOLD}[!]${NC} Scan interrupted. Partial results may have been saved."
         LOG "WARNING" "Scan interrupted with exit code $EXIT_CODE"
@@ -1207,9 +1208,33 @@ VHOST_WILDCARD_DETECTION() {
         return 0
     fi
 }
+PROCESS_ACTIVE_CHUNK() {
+    local CHUNK="$1"
+    local CHUNK_RESULTS="$THREAD_DIR/results_$(basename "$CHUNK")"
+    local PROCESSED=0
+    local CHUNK_SIZE=$(wc -l <"$CHUNK")
+    LOG "DEBUG" "Processing chunk: $CHUNK with $CHUNK_SIZE entries"
+    # Define per-chunk progress file
+    local PROGRESS_FILE="$THREAD_DIR/progress_$(basename "$CHUNK")"
+    echo "0" >"$PROGRESS_FILE"
+    while read -r SUBDOMAIN; do
+        local TARGET="${SUBDOMAIN}.${DOMAIN}"
+        local RESOLVER=${RESOLVERS[$((RANDOM % ${#RESOLVERS[@]}))]}
+        LOG "DEBUG" "Testing subdomain: $TARGET using resolver: $RESOLVER"
+        if dig +short "$TARGET" "@$RESOLVER" | grep -q '^[0-9]'; then
+            LOG "INFO" "Found valid subdomain: $TARGET"
+            echo -e "${INDENT}     ${GREEN}${BOLD}[+]${NC} Found: $TARGET"
+            echo "$TARGET" >> "$CHUNK_RESULTS"
+        fi
+        ((PROCESSED++))
+        echo "$PROCESSED" >"$PROGRESS_FILE"
+        LOG "DEBUG" "Processed $PROCESSED/$CHUNK_SIZE in current chunk"
+    done <"$CHUNK"
+    LOG "DEBUG" "Completed processing chunk: $CHUNK"
+}
 ACTIVE_SCAN() {
     local DOMAIN="$1"
-    local RESULTS_FILE="${2:-${OUTPUT:-$PWD/${DOMAIN}_active.txt}}"
+    local RESULTS_FILE="${2:-${OUTPUT:-$PWD/${DOMAIN}_ACTIVE.TXT}}"
     local INDENT="$3"
     LOG "DEBUG" "Starting ACTIVE_SCAN for domain: $DOMAIN with $THREAD_COUNT threads"
     LOG "DEBUG" "Results will be written to: $RESULTS_FILE"
@@ -1236,14 +1261,12 @@ ACTIVE_SCAN() {
         # Create thread directory with proper permissions and cleanup handler
         local THREAD_DIR="$TEMP_DIR/threads"
         local PROGRESS_DIR="$THREAD_DIR/progress"
-        
         # Ensure directories exist with proper permissions
         mkdir -p "$THREAD_DIR" "$PROGRESS_DIR" || {
             LOG "ERROR" "Failed to create thread directories"
             echo -e "${RED}${BOLD}[ERROR]${NC} Failed to create thread directories"
             return 1
         }
-        
         # Ensure directories are writable
         chmod 755 "$THREAD_DIR" "$PROGRESS_DIR" || {
             LOG "ERROR" "Failed to set directory permissions"
@@ -1262,7 +1285,6 @@ ACTIVE_SCAN() {
         LOG "DEBUG" "Thread directories created successfully"
         local CHUNK_SIZE=$(((TOTAL_WORDS + THREAD_COUNT - 1) / THREAD_COUNT))
         LOG "DEBUG" "Splitting wordlist into chunks of size: $CHUNK_SIZE"
-        
         # Create chunks with proper error handling
         split -l "$CHUNK_SIZE" "$WORDLIST_PATH" "$THREAD_DIR/chunk_" || {
             LOG "ERROR" "Failed to split wordlist into chunks"
@@ -1275,61 +1297,35 @@ ACTIVE_SCAN() {
             mapfile -t RESOLVERS <"$RESOLVER_FILE"
             LOG "DEBUG" "Loaded ${#RESOLVERS[@]} resolvers from $RESOLVER_FILE"
         fi
-        PROCESS_CHUNK() {
-            local chunk="$1"
-            local chunk_results="$THREAD_DIR/results_$(basename "$chunk")"
-            local processed=0
-            local chunk_size=$(wc -l <"$chunk")
-            LOG "DEBUG" "Processing chunk: $chunk with $chunk_size entries"
-            # Define per-chunk progress file
-            local progress_file="$THREAD_DIR/progress_$(basename "$chunk")"
-            echo "0" >"$progress_file"
-            while read -r SUBDOMAIN; do
-                local TARGET="${SUBDOMAIN}.${DOMAIN}"
-                local resolver=${RESOLVERS[$((RANDOM % ${#RESOLVERS[@]}))]}
-                LOG "DEBUG" "Testing subdomain: $TARGET using resolver: $resolver"
-                if dig +short "$TARGET" "@$resolver" | grep -q '^[0-9]'; then
-                    echo "$TARGET" >>"$chunk_results"
-                    LOG "INFO" "Found valid subdomain: $TARGET"
-                    printf "\r%-100s\r" " "
-                    echo -e "${INDENT}     ${GREEN}${BOLD}[+]${NC} Found: $TARGET"
-                fi
-                ((processed++))
-                # Update per-chunk progress file
-                echo "$processed" >"$progress_file"
-                LOG "DEBUG" "Processed $processed/$chunk_size in current chunk"
-            done <"$chunk"
-            LOG "DEBUG" "Completed processing chunk: $chunk"
-        }
-        local pids=()
-        for chunk in "$THREAD_DIR"/chunk_*; do
-            LOG "DEBUG" "Launching thread for chunk: $chunk"
-            PROCESS_CHUNK "$chunk" &
-            pids+=($!)
-            LOG "DEBUG" "Started thread PID: ${pids[-1]}"
+        local PIDS=()
+        for CHUNK in "$THREAD_DIR"/chunk_*; do
+            LOG "DEBUG" "Launching thread for chunk: $CHUNK"
+            PROCESS_ACTIVE_CHUNK "$CHUNK" &
+            PIDS+=($!)
+            LOG "DEBUG" "Started thread PID: ${PIDS[-1]}"
         done
         while true; do
-            local running=0
-            for pid in "${pids[@]}"; do
-                if kill -0 "$pid" 2>/dev/null; then
-                    ((running++))
+            local RUNNING=0
+            for PID in "${PIDS[@]}"; do
+                if kill -0 "$PID" 2>/dev/null; then
+                    ((RUNNING++))
                 fi
             done
             # Sum up progress with error handling
-            local current_progress=0
-            local progress_files=("$THREAD_DIR"/progress_*)
-            if [ -e "${progress_files[0]}" ]; then
+            local CURRENT_PROGRESS=0
+            local PROGRESS_FILES=("$THREAD_DIR"/progress_*)
+            if [ -e "${PROGRESS_FILES[0]}" ]; then
                 while read -r val; do
-                    ((current_progress += val))
+                    ((CURRENT_PROGRESS += val))
                 done < <(cat "$THREAD_DIR"/progress_* 2>/dev/null || echo 0)
             fi
-            local progress=$((current_progress * 100 / TOTAL_WORDS))
-            LOG "DEBUG" "Progress: $progress% complete, $running threads active"
+            local PROGRESS=$((CURRENT_PROGRESS * 100 / TOTAL_WORDS))
+            LOG "DEBUG" "Progress: $PROGRESS% complete, $RUNNING threads active"
             printf "\r${INDENT}${YELLOW}${BOLD}[*]${NC} Progress: [${GREEN}${BOLD}%-50s${NC}] %3d%% (%d threads active) " \
-                "$(printf '#%.0s' $(seq 1 $((progress / 2))))" \
-                "$progress" \
-                "$running"
-            if [[ $running -eq 0 ]]; then
+                "$(printf '#%.0s' $(seq 1 $((PROGRESS / 2))))" \
+                "$PROGRESS" \
+                "$RUNNING"
+            if [[ $RUNNING -eq 0 ]]; then
                 echo
                 LOG "DEBUG" "All threads completed"
                 break
@@ -1338,17 +1334,11 @@ ACTIVE_SCAN() {
         done
         wait
         LOG "DEBUG" "All threads finished execution"
-        echo -e -n "\033[1A\033[2K\r"
-        if find "$THREAD_DIR" -name "results_chunk_*" -type f | grep -q .; then
-            LOG "DEBUG" "Combining results from all chunks"
-            find "$THREAD_DIR" -name "results_chunk_*" -type f -exec cat {} + | sort -u >"$RESULTS_FILE"
-            local TOTAL=$(wc -l <"$RESULTS_FILE")
-            LOG "INFO" "Active scan complete: Found $TOTAL unique subdomains"
-            echo -e "${INDENT}${GREEN}${BOLD}[✓]${NC} Active scan complete: $TOTAL unique results found"
-        else
-            LOG "WARNING" "No subdomains found during active scan"
-            [[ "$RECURSIVE_SCAN_ENABLED" == false ]] && echo -e "${INDENT}${YELLOW}${BOLD}[!]${NC} No subdomains found"
-        fi
+        # Merge results from all chunks
+        cat "$THREAD_DIR"/results_* >"$RESULTS_FILE" 2>/dev/null
+        # Count total unique results
+        local TOTAL=$(sort -u "$RESULTS_FILE" | wc -l)
+        echo -e "${INDENT}${GREEN}${BOLD}[✓]${NC} Active scan complete: $TOTAL unique results found"
         LOG "DEBUG" "Cleaning up temporary thread directory: $THREAD_DIR"
         rm -rf "$THREAD_DIR" 2>/dev/null || {
             CLEANUP
@@ -1356,6 +1346,127 @@ ACTIVE_SCAN() {
     fi
     LOG "DEBUG" "ACTIVE_SCAN completed for domain: $DOMAIN"
     return 0
+}
+# Add helper function for status colors
+GET_STATUS_COLOR() {
+    local STATUS=$1
+    case $STATUS in
+    200) echo "${GREEN}" ;;                     # Success
+    301 | 302 | 307 | 308) echo "${BLUE}" ;;    # Redirects
+    401 | 403) echo "${YELLOW}" ;;              # Auth required/Forbidden
+    404) echo "${RED}" ;;                       # Not Found
+    500 | 502 | 503 | 504) echo "${MAGENTA}" ;; # Server Errors
+    *) echo "${WHITE}" ;;                       # Other codes
+    esac
+}
+PROCESS_VHOST_CHUNK() {
+    local CHUNK="$1"
+    local PORT="$2"
+    local CHUNK_RESULTS="$THREAD_DIR/results_$(basename "$CHUNK")_${PORT}"
+    local PROCESSED=0
+    local CHUNK_SIZE=$(wc -l <"$CHUNK")
+    local PROGRESS_FILE="$THREAD_DIR/progress_$(basename "$CHUNK")_${PORT}"
+    echo "0" >"$PROGRESS_FILE"
+    # Determine protocol based on port
+    local PROTOCOL="http"
+    local PROTOCOL=$(DETECT_PROTOCOL "${DOMAIN_IP}" "${PORT}")
+    while IFS= read -r SUBDOMAIN; do
+        local VHOST="${SUBDOMAIN}.${DOMAIN}"
+        # Get random User-Agent
+        local RANDOM_UA=${USER_AGENTS[$RANDOM % ${#USER_AGENTS[@]}]}
+        # Start timing
+        local START_TIME=$(date +%s%N)
+        # Use curl with connection timeout, max time and SSL options
+        local RESPONSE=$(curl -s -I \
+            --connect-timeout 3 \
+            --max-time 5 \
+            -k \
+            -A "$RANDOM_UA" \
+            -H "Host: ${VHOST}" \
+            "${PROTOCOL}://${DOMAIN_IP}:${PORT}" 2>/dev/null)
+        # Calculate duration in milliseconds
+        local END_TIME=$(date +%s%N)
+        local STATUS=$(echo "$RESPONSE" | grep -E "^HTTP" | cut -d' ' -f2)
+        local SIZE=$(echo "$RESPONSE" | grep -E "^Content-Length" | cut -d' ' -f2 | awk '{print int($1)}')
+        local WORDS=$(echo "$RESPONSE" | wc -w)
+        local LINES=$(echo "$RESPONSE" | wc -l)
+        local DURATION=$(((END_TIME - START_TIME) / 1000000))
+        if [[ "$STATUS" =~ ^(200|30[0-9])$ ]]; then
+            # Apply filters if specified
+            local SHOW_RESULT=true
+            if [[ -n "$VHOST_FILTER" ]]; then
+                case "$VHOST_FILTER_TYPE" in
+                "status")
+                    # Split comma-separated filters into array
+                    IFS=',' read -ra FILTERS <<<"$VHOST_FILTER"
+                    for FILTER in "${FILTERS[@]}"; do
+                        # If any filter matches, hide the result
+                        [[ "$STATUS" =~ ^($FILTER)$ ]] && SHOW_RESULT=false && break
+                    done
+                    ;;
+                "size")
+                    IFS=',' read -ra FILTERS <<<"$VHOST_FILTER"
+                    for FILTER in "${FILTERS[@]}"; do
+                        if [[ "$FILTER" =~ ^[0-9]+$ ]]; then
+                            [[ "$SIZE" -eq "$FILTER" ]] && SHOW_RESULT=false && break
+                        elif [[ "$FILTER" =~ ^\<[0-9]+$ ]]; then
+                            local VAL=${FILTER#<}
+                            [[ "$SIZE" -lt "$VAL" ]] && SHOW_RESULT=false && break
+                        elif [[ "$FILTER" =~ ^\>[0-9]+$ ]]; then
+                            local VAL=${FILTER#>}
+                            [[ "$SIZE" -gt "$VAL" ]] && SHOW_RESULT=false && break
+                        fi
+                    done
+                    ;;
+                "words")
+                    IFS=',' read -ra FILTERS <<<"$VHOST_FILTER"
+                    for FILTER in "${FILTERS[@]}"; do
+                        if [[ "$FILTER" =~ ^[0-9]+$ ]]; then
+                            [[ "$WORDS" -eq "$FILTER" ]] && SHOW_RESULT=false && break
+                        elif [[ "$FILTER" =~ ^\<[0-9]+$ ]]; then
+                            local VAL=${FILTER#<}
+                            [[ "$WORDS" -lt "$VAL" ]] && SHOW_RESULT=false && break
+                        elif [[ "$FILTER" =~ ^\>[0-9]+$ ]]; then
+                            local VAL=${FILTER#>}
+                            [[ "$WORDS" -gt "$VAL" ]] && SHOW_RESULT=false && break
+                        fi
+                    done
+                    ;;
+                "lines")
+                    IFS=',' read -ra FILTERS <<<"$VHOST_FILTER"
+                    for FILTER in "${FILTERS[@]}"; do
+                        if [[ "$FILTER" =~ ^[0-9]+$ ]]; then
+                            [[ "$LINES" -eq "$FILTER" ]] && SHOW_RESULT=false && break
+                        elif [[ "$FILTER" =~ ^\<[0-9]+$ ]]; then
+                            local VAL=${FILTER#<}
+                            [[ "$LINES" -lt "$VAL" ]] && SHOW_RESULT=false && break
+                        elif [[ "$FILTER" =~ ^\>[0-9]+$ ]]; then
+                            local VAL=${FILTER#>}
+                            [[ "$LINES" -gt "$VAL" ]] && SHOW_RESULT=false && break
+                        fi
+                    done
+                    ;;
+                esac
+            fi
+            if [[ "$SHOW_RESULT" == true ]]; then
+                {
+                    flock 200
+                    printf "\033[2K\r" # Clear current line
+                    local STATUS_COLOR=$(GET_STATUS_COLOR "$STATUS")
+                    echo -e "${INDENT}   ${GREEN}${BOLD}[+]${NC} Found: ${PROTOCOL}://${VHOST}"
+                    echo -e "${INDENT}      └─▶ IP: ${DOMAIN_IP} ${PROTOCOL}://${DOMAIN}:${PORT}"
+                    echo -e "${INDENT}      [${BOLD}Status: ${STATUS_COLOR}${STATUS}${NC}, ${BOLD}Size: ${BLUE}${SIZE}${NC}, ${BOLD}Words: ${YELLOW}${WORDS}${NC}, ${BOLD}Lines: ${MAGENTA}${LINES}${NC}, ${BOLD}Duration: ${CYAN}${DURATION}ms${NC}]"
+                    if [[ "$RAW_OUTPUT" == true ]]; then
+                        echo "${DOMAIN_IP}    ${VHOST}" >>"$CHUNK_RESULTS"
+                    else
+                        echo "${VHOST}:${PORT} ${PROTOCOL}://${DOMAIN}:${PORT} (Status: ${STATUS})" >>"$CHUNK_RESULTS"
+                    fi
+                } 200>"$STATUS_FILE.lock"
+            fi
+        fi
+        ((PROCESSED++))
+        echo "$PROCESSED" >"$PROGRESS_FILE"
+    done <"$CHUNK"
 }
 VHOST_SCAN() {
     local DOMAIN="$1"
@@ -1417,7 +1528,6 @@ VHOST_SCAN() {
     # Check which ports are open before starting the scan
     local OPEN_PORTS=()
     echo -e "${INDENT}${YELLOW}${BOLD}[*]${NC} Checking for open ports..."
-    
     for PORT in "${VHOST_PORTS[@]}"; do
         echo -n -e "${INDENT}   ${YELLOW}${BOLD}[*]${NC} Testing port ${WHITE}${BOLD}$PORT${NC}... "
         if CHECK_PORT "$DOMAIN_IP" "$PORT"; then
@@ -1445,156 +1555,35 @@ VHOST_SCAN() {
             LOG "INFO" "Aborting VHOST scan on port $PORT due to wildcard detection"
             continue
         fi
-        PROCESS_VHOST_CHUNK() {
-            local chunk="$1"
-            local port="$2"
-            local chunk_results="$THREAD_DIR/results_$(basename "$chunk")_${port}"
-            local processed=0
-            local chunk_size=$(wc -l <"$chunk")
-            local progress_file="$THREAD_DIR/progress_$(basename "$chunk")_${port}"
-            echo "0" >"$progress_file"
-            # Determine protocol based on port
-            local PROTOCOL="http"
-            local PROTOCOL=$(DETECT_PROTOCOL "${DOMAIN_IP}" "${port}")
-            # Add helper function for status colors
-            get_status_color() {
-                local status=$1
-                case $status in
-                200) echo "${GREEN}" ;;                     # Success
-                301 | 302 | 307 | 308) echo "${BLUE}" ;;    # Redirects
-                401 | 403) echo "${YELLOW}" ;;              # Auth required/Forbidden
-                404) echo "${RED}" ;;                       # Not Found
-                500 | 502 | 503 | 504) echo "${MAGENTA}" ;; # Server Errors
-                *) echo "${WHITE}" ;;                       # Other codes
-                esac
-            }
-            while IFS= read -r SUBDOMAIN; do
-                local VHOST="${SUBDOMAIN}.${DOMAIN}"
-                # Get random User-Agent
-                local RANDOM_UA=${USER_AGENTS[$RANDOM % ${#USER_AGENTS[@]}]}
-                # Start timing
-                local START_TIME=$(date +%s%N)
-                # Use curl with connection timeout, max time and SSL options
-                local RESPONSE=$(curl -s -I \
-                    --connect-timeout 3 \
-                    --max-time 5 \
-                    -k \
-                    -A "$RANDOM_UA" \
-                    -H "Host: ${VHOST}" \
-                    "${PROTOCOL}://${DOMAIN_IP}:${port}" 2>/dev/null)
-                # Calculate duration in milliseconds
-                local END_TIME=$(date +%s%N)
-                local STATUS=$(echo "$RESPONSE" | grep -E "^HTTP" | cut -d' ' -f2)
-                local SIZE=$(echo "$RESPONSE" | grep -E "^Content-Length" | cut -d' ' -f2 | awk '{print int($1)}')
-                local WORDS=$(echo "$RESPONSE" | wc -w)
-                local LINES=$(echo "$RESPONSE" | wc -l)
-                local DURATION=$(((END_TIME - START_TIME) / 1000000))
-                if [[ "$STATUS" =~ ^(200|30[0-9])$ ]]; then
-                    # Apply filters if specified
-                    local SHOW_RESULT=true
-                    if [[ -n "$VHOST_FILTER" ]]; then
-                        case "$VHOST_FILTER_TYPE" in
-                            "status")
-                                # Split comma-separated filters into array
-                                IFS=',' read -ra FILTERS <<< "$VHOST_FILTER"
-                                for filter in "${FILTERS[@]}"; do
-                                    # If any filter matches, hide the result
-                                    [[ "$STATUS" =~ ^($filter)$ ]] && SHOW_RESULT=false && break
-                                done
-                                ;;
-                            "size")
-                                IFS=',' read -ra FILTERS <<< "$VHOST_FILTER"
-                                for filter in "${FILTERS[@]}"; do
-                                    if [[ "$filter" =~ ^[0-9]+$ ]]; then
-                                        [[ "$SIZE" -eq "$filter" ]] && SHOW_RESULT=false && break
-                                    elif [[ "$filter" =~ ^\<[0-9]+$ ]]; then
-                                        local val=${filter#<}
-                                        [[ "$SIZE" -lt "$val" ]] && SHOW_RESULT=false && break
-                                    elif [[ "$filter" =~ ^\>[0-9]+$ ]]; then
-                                        local val=${filter#>}
-                                        [[ "$SIZE" -gt "$val" ]] && SHOW_RESULT=false && break
-                                    fi
-                                done
-                                ;;
-                            "words")
-                                IFS=',' read -ra FILTERS <<< "$VHOST_FILTER"
-                                for filter in "${FILTERS[@]}"; do
-                                    if [[ "$filter" =~ ^[0-9]+$ ]]; then
-                                        [[ "$WORDS" -eq "$filter" ]] && SHOW_RESULT=false && break
-                                    elif [[ "$filter" =~ ^\<[0-9]+$ ]]; then
-                                        local val=${filter#<}
-                                        [[ "$WORDS" -lt "$val" ]] && SHOW_RESULT=false && break
-                                    elif [[ "$filter" =~ ^\>[0-9]+$ ]]; then
-                                        local val=${filter#>}
-                                        [[ "$WORDS" -gt "$val" ]] && SHOW_RESULT=false && break
-                                    fi
-                                done
-                                ;;
-                            "lines")
-                                IFS=',' read -ra FILTERS <<< "$VHOST_FILTER"
-                                for filter in "${FILTERS[@]}"; do
-                                    if [[ "$filter" =~ ^[0-9]+$ ]]; then
-                                        [[ "$LINES" -eq "$filter" ]] && SHOW_RESULT=false && break
-                                    elif [[ "$filter" =~ ^\<[0-9]+$ ]]; then
-                                        local val=${filter#<}
-                                        [[ "$LINES" -lt "$val" ]] && SHOW_RESULT=false && break
-                                    elif [[ "$filter" =~ ^\>[0-9]+$ ]]; then
-                                        local val=${filter#>}
-                                        [[ "$LINES" -gt "$val" ]] && SHOW_RESULT=false && break
-                                    fi
-                                done
-                                ;;
-                        esac
-                    fi
-                    if [[ "$SHOW_RESULT" == true ]]; then
-                        {
-                            flock 200
-                            printf "\033[2K\r" # Clear current line
-                            local STATUS_COLOR=$(get_status_color "$STATUS")
-                            echo -e "${INDENT}   ${GREEN}${BOLD}[+]${NC} Found: ${PROTOCOL}://${VHOST}"
-                            echo -e "${INDENT}      └─▶ IP: ${DOMAIN_IP} ${PROTOCOL}://${DOMAIN}:${port}"
-                            echo -e "${INDENT}      [${BOLD}Status: ${STATUS_COLOR}${STATUS}${NC}, ${BOLD}Size: ${BLUE}${SIZE}${NC}, ${BOLD}Words: ${YELLOW}${WORDS}${NC}, ${BOLD}Lines: ${MAGENTA}${LINES}${NC}, ${BOLD}Duration: ${CYAN}${DURATION}ms${NC}]"
-                            if [[ "$RAW_OUTPUT" == true ]]; then
-                                echo "${DOMAIN_IP}    ${VHOST}" >>"$chunk_results"
-                            else
-                                echo "${VHOST}:${port} ${PROTOCOL}://${DOMAIN}:${port} (Status: ${STATUS})" >>"$chunk_results"
-                            fi
-                        } 200>"$STATUS_FILE.lock"
-                    fi
-                fi
-                ((processed++))
-                echo "$processed" >"$progress_file"
-            done <"$chunk"
-        }
-        local pids=()
+        local PIDS=()
         # Launch parallel threads for current port
-        for chunk in "$THREAD_DIR"/chunk_*; do
-            PROCESS_VHOST_CHUNK "$chunk" "$PORT" &
-            pids+=($!)
-            LOG "DEBUG" "Started VHOST thread PID: ${pids[-1]} for port $PORT"
+        for CHUNK in "$THREAD_DIR"/chunk_*; do
+            PROCESS_VHOST_CHUNK "$CHUNK" "$PORT" &
+            PIDS+=($!)
+            LOG "DEBUG" "Started VHOST thread PID: ${PIDS[-1]} for port $PORT"
         done
         # Monitor progress for current port
         while true; do
-            local running=0
-            for pid in "${pids[@]}"; do
-                if kill -0 "$pid" 2>/dev/null; then
-                    ((running++))
+            local RUNNING=0
+            for PID in "${PIDS[@]}"; do
+                if kill -0 "$PID" 2>/dev/null; then
+                    ((RUNNING++))
                 fi
             done
             # Calculate progress for current port
-            local current_progress=0
-            for pf in "$THREAD_DIR"/progress_*_${PORT}; do
-                if [[ -f "$pf" ]]; then
-                    local val=$(cat "$pf")
-                    ((current_progress += val))
+            local CURRENT_PROGRESS=0
+            for PF in "$THREAD_DIR"/progress_*_${PORT}; do
+                if [[ -f "$PF" ]]; then
+                    local VAL=$(cat "$PF")
+                    ((CURRENT_PROGRESS += VAL))
                 fi
             done
-            local progress=$((current_progress * 100 / TOTAL_WORDS))
+            local PROGRESS=$((CURRENT_PROGRESS * 100 / TOTAL_WORDS))
             printf "\r${INDENT}${YELLOW}${BOLD}[*]${NC} Progress: [${GREEN}${BOLD}%-50s${NC}] %3d%% (%d threads active) " \
-                "$(printf '#%.0s' $(seq 1 $((progress / 2))))" \
-                "$progress" \
-                "$running"
-            if [[ $running -eq 0 ]]; then
+                "$(printf '#%.0s' $(seq 1 $((PROGRESS / 2))))" \
+                "$PROGRESS" \
+                "$RUNNING"
+            if [[ $RUNNING -eq 0 ]]; then
                 echo
                 break
             fi
@@ -1618,7 +1607,7 @@ VHOST_SCAN() {
     if find "$THREAD_DIR" -name "port_*_results" -type f | grep -q .; then
         cat "$THREAD_DIR"/port_*_results | sort -u >"$OUTPUT_FILE"
         FOUND_COUNT=$(wc -l <"$OUTPUT_FILE")
-        [[ "$RECURSIVE_SCAN_ENABLED" == false ]] && echo -e  "${GREEN}${BOLD}[✓]${NC} VHOST scan complete: Found ${WHITE}${BOLD}${FOUND_COUNT}${NC} hosts"
+        [[ "$RECURSIVE_SCAN_ENABLED" == false ]] && echo -e "${GREEN}${BOLD}[✓]${NC} VHOST scan complete: Found ${WHITE}${BOLD}${FOUND_COUNT}${NC} hosts"
     fi
     # Final cleanup
     rm -rf "$THREAD_DIR"
@@ -1839,6 +1828,9 @@ RECURSIVE_SCAN() {
 
 
 
+
+# Add trap for SIGINT and SIGTERM
+trap 'CLEANUP' SIGINT SIGTERM
 
 # Setup initial state
 CREATE_TEMP_DIR

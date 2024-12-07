@@ -9,7 +9,7 @@ CREATE_TEMP_DIR() {
 }
 
 # Add trap for SIGINT/SIGTERM
-trap 'CLEANUP; exit 130' SIGINT SIGTERM
+#trap 'CLEANUP; exit 130' SIGINT SIGTERM
 
 CLEANUP() {
     local EXIT_CODE=$?
@@ -18,12 +18,13 @@ CLEANUP() {
         return $EXIT_CODE
     fi
     CLEANUP_DONE="true"
+    INTERRUPT_RECEIVED="true"
 
     echo -e "\n${YELLOW}${BOLD}[!]${NC} Cleaning up..."
     LOG "INFO" "Cleaning up temporary files"
 
-    # Kill any remaining background processes
-    jobs -p | xargs -r kill -9 2>/dev/null
+    # Kill all background processes
+    pkill -P $$
 
     if [ $EXIT_CODE -ne 0 ]; then
         echo -e "${RED}${BOLD}[!]${NC} Scan interrupted. Partial results may have been saved."

@@ -9,6 +9,9 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)/lib/passive.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)/lib/active.sh"
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)/lib/scan.sh"
 
+# Add trap for SIGINT and SIGTERM
+trap 'CLEANUP' SIGINT SIGTERM
+
 # Setup initial state
 CREATE_TEMP_DIR
 

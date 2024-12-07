@@ -41,7 +41,7 @@ declare -g VHOST_SCAN_ENABLED=false
 declare -g PATTERN_RECOGNITION_ENABLED=false
 declare -g API_VALIDATION_ENABLED=true
 
-declare -g VHOST_PORTS=(80 443 8080 8443)
+declare -g VHOST_PORTS=(80 443)
 
 # Colors
 declare -r RED='\033[0;31m'
