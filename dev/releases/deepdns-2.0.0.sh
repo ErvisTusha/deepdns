@@ -445,6 +445,25 @@ VALIDATE_API_KEY() {
     LOG "DEBUG" "Validated $TYPE API key"
     return $?
 }
+VALIDATE_WORDLIST_CHUNK() {
+    local CHUNK="$1"
+    local CHUNK_RESULTS="$THREAD_DIR/results_$(basename "$CHUNK")"
+    local PROCESSED=0
+    local CHUNK_SIZE=$(wc -l <"$CHUNK")
+    while read -r WORD; do
+        if [[ "$WORD" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] && [[ ${#WORD} -le 63 ]]; then
+            echo "$WORD" >>"$CHUNK_RESULTS"
+            ((PROCESSED++))
+        else
+            LOG "DEBUG" "Invalid word removed: $WORD"
+        fi
+        (
+            flock 200
+            local CURRENT=$(cat "$PROGRESS_FILE")
+            echo $((CURRENT + 1)) >"$PROGRESS_FILE"
+        ) 200>"$PROGRESS_FILE.lock"
+    done < <(tr '[:upper:]' '[:lower:]' <"$CHUNK")
+}
 CLEAN_WORDLIST() {
     local INPUT_FILE="$1"
     #local THREAD_COUNT="${2:-10}"
@@ -486,46 +505,27 @@ CLEAN_WORDLIST() {
     local CHUNK_SIZE=$(((TOTAL_COUNT + THREAD_COUNT - 1) / THREAD_COUNT))
     LOG "DEBUG" "Splitting wordlist into chunks of size: $CHUNK_SIZE"
     tr -d '\000' <"$INPUT_FILE" | tr -d '\0' | grep -E '^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$' | split -l "$CHUNK_SIZE" - "$THREAD_DIR/chunk_"
-    validate_wordlist_chunk() {
-        local chunk="$1"
-        local chunk_results="$THREAD_DIR/results_$(basename "$chunk")"
-        local processed=0
-        local chunk_size=$(wc -l <"$chunk")
-        while read -r WORD; do
-            if [[ "$WORD" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] && [[ ${#WORD} -le 63 ]]; then
-                echo "$WORD" >>"$chunk_results"
-                ((processed++))
-            else
-                LOG "DEBUG" "Invalid word removed: $WORD"
-            fi
-            (
-                flock 200
-                local current=$(cat "$PROGRESS_FILE")
-                echo $((current + 1)) >"$PROGRESS_FILE"
-            ) 200>"$PROGRESS_FILE.lock"
-        done < <(tr '[:upper:]' '[:lower:]' <"$chunk")
-    }
-    local pids=()
-    for chunk in "$THREAD_DIR"/chunk_*; do
-        LOG "DEBUG" "Launching validation thread for chunk: $chunk"
-        validate_wordlist_chunk "$chunk" &
-        pids+=($!)
-        LOG "DEBUG" "Started wordlist validation thread PID: ${pids[-1]}"
+    local PIDS=()
+    for CHUNK in "$THREAD_DIR"/chunk_*; do
+        LOG "DEBUG" "Launching validation thread for chunk: $CHUNK"
+        VALIDATE_WORDLIST_CHUNK "$CHUNK" &
+        PIDS+=($!)
+        LOG "DEBUG" "Started wordlist validation thread PID: ${PIDS[-1]}"
     done
     while true; do
-        local running=0
-        for pid in "${pids[@]}"; do
-            if kill -0 "$pid" 2>/dev/null; then
-                ((running++))
+        local RUNNING=0
+        for PID in "${PIDS[@]}"; do
+            if kill -0 "$PID" 2>/dev/null; then
+                ((RUNNING++))
             fi
         done
-        local current_progress=$(cat "$PROGRESS_FILE")
-        local progress=$((current_progress * 100 / TOTAL_COUNT))
+        local CURRENT_PROGRESS=$(cat "$PROGRESS_FILE")
+        local PROGRESS=$((CURRENT_PROGRESS * 100 / TOTAL_COUNT))
         printf "\r${YELLOW}${BOLD}[*]${NC} Progress: [${GREEN}${BOLD}%-50s${NC}] %3d%% (%d threads active) " \
-            "$(printf '#%.0s' $(seq 1 $((progress / 2))))" \
-            "$progress" \
-            "$running"
-        if [[ $running -eq 0 ]]; then
+            "$(printf '#%.0s' $(seq 1 $((PROGRESS / 2))))" \
+            "$PROGRESS" \
+            "$RUNNING"
+        if [[ $RUNNING -eq 0 ]]; then
             echo
             break
         fi
@@ -547,6 +547,24 @@ CLEAN_WORDLIST() {
     LOG "INFO" "Wordlist validation complete. Using $WORKING_COUNT valid entries"
     rm -rf "$THREAD_DIR"
     return 0
+}
+VALIDATE_RESOLVER_CHUNK() {
+    local CHUNK="$1"
+    local CHUNK_RESULTS="$THREAD_DIR/results_$(basename "$CHUNK")"
+    local PROCESSED=0
+    local CHUNK_SIZE=$(wc -l <"$CHUNK")
+    while read -r RESOLVER; do
+        if timeout $TIMEOUT dig @"$RESOLVER" "$TEST_DOMAIN" A +time=1 +tries=1 &>/dev/null &&
+            timeout $TIMEOUT dig @"$RESOLVER" "$TEST_DOMAIN" NS +time=1 +tries=1 &>/dev/null; then
+            echo "$RESOLVER" >>"$CHUNK_RESULTS"
+            LOG "DEBUG" "Working resolver found: $RESOLVER"
+        else
+            LOG "DEBUG" "Failed resolver: $RESOLVER"
+        fi
+        ((PROCESSED++))
+        local CURRENT=$(cat "$PROGRESS_FILE")
+        echo $((CURRENT + 1)) >"$PROGRESS_FILE"
+    done <"$CHUNK"
 }
 CLEAN_RESOLVERS() {
     local INPUT_FILE="$1"
@@ -598,45 +616,27 @@ CLEAN_RESOLVERS() {
     echo "0" >"$PROGRESS_FILE"
     local CHUNK_SIZE=$(((TOTAL_COUNT + THREAD_COUNT - 1) / THREAD_COUNT))
     split -l "$CHUNK_SIZE" "$TEMP_FILE" "$THREAD_DIR/chunk_"
-    validate_resolver_chunk() {
-        local chunk="$1"
-        local chunk_results="$THREAD_DIR/results_$(basename "$chunk")"
-        local processed=0
-        local chunk_size=$(wc -l <"$chunk")
-        while read -r RESOLVER; do
-            if timeout $TIMEOUT dig @"$RESOLVER" "$TEST_DOMAIN" A +time=1 +tries=1 &>/dev/null &&
-                timeout $TIMEOUT dig @"$RESOLVER" "$TEST_DOMAIN" NS +time=1 +tries=1 &>/dev/null; then
-                echo "$RESOLVER" >>"$chunk_results"
-                LOG "DEBUG" "Working resolver found: $RESOLVER"
-            else
-                LOG "DEBUG" "Failed resolver: $RESOLVER"
-            fi
-            ((processed++))
-            local current=$(cat "$PROGRESS_FILE")
-            echo $((current + 1)) >"$PROGRESS_FILE"
-        done <"$chunk"
-    }
-    local pids=()
-    for chunk in "$THREAD_DIR"/chunk_*; do
-        LOG "DEBUG" "Launching validation thread for chunk: $chunk"
-        validate_resolver_chunk "$chunk" &
-        pids+=($!)
-        LOG "DEBUG" "Started resolver validation thread PID: ${pids[-1]}"
+    local PIDS=()
+    for CHUNK in "$THREAD_DIR"/chunk_*; do
+        LOG "DEBUG" "Launching validation thread for chunk: $CHUNK"
+        VALIDATE_RESOLVER_CHUNK "$CHUNK" &
+        PIDS+=($!)
+        LOG "DEBUG" "Started resolver validation thread PID: ${PIDS[-1]}"
     done
     while true; do
-        local running=0
-        for pid in "${pids[@]}"; do
-            if kill -0 "$pid" 2>/dev/null; then
-                ((running++))
+        local RUNNING=0
+        for PID in "${PIDS[@]}"; do
+            if kill -0 "$PID" 2>/dev/null; then
+                ((RUNNING++))
             fi
         done
-        local current_progress=$(cat "$PROGRESS_FILE")
-        local progress=$((current_progress * 100 / TOTAL_COUNT))
+        local CURRENT_PROGRESS=$(cat "$PROGRESS_FILE")
+        local PROGRESS=$((CURRENT_PROGRESS * 100 / TOTAL_COUNT))
         printf "\r${YELLOW}${BOLD}[*]${NC} Progress: [${GREEN}${BOLD}%-50s${NC}] %3d%% (%d threads active) " \
-            "$(printf '#%.0s' $(seq 1 $((progress / 2))))" \
-            "$progress" \
-            "$running"
-        if [[ $running -eq 0 ]]; then
+            "$(printf '#%.0s' $(seq 1 $((PROGRESS / 2))))" \
+            "$PROGRESS" \
+            "$RUNNING"
+        if [[ $RUNNING -eq 0 ]]; then
             echo
             break
         fi

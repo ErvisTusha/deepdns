@@ -121,26 +121,26 @@ FORMAT_RESULTS() {
             local TOTAL=$(wc -l < "$OUTPUT_FILE")
             LOG "INFO" "Saved $TOTAL raw entries to $OUTPUT_FILE"
         else
-            LOG "WARNING" "No results found for $DOMAIN"
-            TOTAL=0
+            # If no results in output file, try to find them in VHOST and other results
+            find "${TEMP_DIR}" -type f -name "*_results" -exec cat {} + | sort -u > "$OUTPUT_FILE"
+            TOTAL=$(wc -l < "$OUTPUT_FILE")
+            LOG "WARNING" "No direct results found, recovered $TOTAL entries from scan files"
         fi
     else
-        find "${DEFAULT_OUTPUT_DIR}" -type f -name "${DOMAIN}_*.txt" -exec cat {} + >"$TEMP_MERGED"
+        # For normal output, process results from all scan types
+        {
+            # Collect results from all potential sources
+            if [[ -s "$OUTPUT_FILE" ]]; then
+                cat "$OUTPUT_FILE"
+            fi
+            find "${TEMP_DIR}" -type f -name "*_results" -exec cat {} + 2>/dev/null
+        } | grep -Eh "^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}($|:[0-9]+)" | 
+          sort -u | 
+          grep -v "^$DOMAIN$" > "$TEMP_FILE"
 
-        if [[ -s "$TEMP_MERGED" ]] || [[ -s "$OUTPUT_FILE" ]]; then
-            cat "$TEMP_MERGED" "$OUTPUT_FILE" 2>/dev/null |
-                grep -Eh "^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$" |
-                sort -u |
-                grep -v "^$DOMAIN$" >"$TEMP_FILE"
-
-            mv "$TEMP_FILE" "$OUTPUT_FILE"
-
-            local TOTAL=$(wc -l <"$OUTPUT_FILE")
-            LOG "INFO" "Saved $TOTAL unique domains to $OUTPUT_FILE"
-        else
-            LOG "WARNING" "No results found for $DOMAIN"
-            TOTAL=0
-        fi
+        mv "$TEMP_FILE" "$OUTPUT_FILE"
+        TOTAL=$(wc -l < "$OUTPUT_FILE")
+        LOG "INFO" "Saved $TOTAL unique domains to $OUTPUT_FILE"
     fi
 
     END_TIME=$(date +%s)
