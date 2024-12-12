@@ -4,102 +4,121 @@
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Bash](https://img.shields.io/badge/bash-5.0%2B-orange.svg)](https://www.gnu.org/software/bash/)
 
-An advanced DNS enumeration tool for comprehensive DNS reconnaissance and security assessments.
+**DeepDNS** is an advanced DNS enumeration tool designed for security professionals and enthusiasts. It offers a comprehensive set of features for discovering subdomains and analyzing DNS records efficiently.
 
-## Overview
+## Features
 
-DeepDNS is a powerful Bash script designed for in-depth DNS enumeration and reconnaissance. It combines both passive and active scanning techniques to discover subdomains, DNS records, and potential misconfigurations, aiding security professionals in penetration testing and vulnerability assessments.
-
-## Key Features
-
-- **Passive Scanning**: Leverage APIs like SecurityTrails and VirusTotal for silent subdomain enumeration.
-- **Active Scanning**: Perform DNS record enumeration and wordlist-based brute-force attacks.
-- **Recursive Scanning**: Scan discovered subdomains up to a specified depth.
-- **Customization**: Support custom wordlists and DNS resolver files.
-- **Detailed Output**: Provide options for verbose and debug modes, outputting results to specified files.
-- **User-Friendly Interface**: Feature ANSI color-coded output for enhanced readability.
+- **Advanced DNS Enumeration**: Multiple scanning modes including passive data sources and active probing techniques
+- **Recursive Scanning**: Discover subdomains recursively with configurable depth
+- **Pattern Recognition**: Intelligent subdomain discovery using pattern analysis
+- **Virtual Host Scanning**: Identify virtual hosts with customizable ports and response filtering
+- **Multithreading**: High-performance concurrent processing with adjustable thread counts
+- **Smart Resolver Management**: Automatic resolver health monitoring and rotation
+- **API Integration**: Seamless integration with SecurityTrails, VirusTotal, and Censys
+- **Robust Error Handling**: Graceful interrupt handling and comprehensive error recovery
+- **Protocol Detection**: Automatic HTTP/HTTPS protocol detection for virtual host scanning
+- **Advanced Logging**: Multiple log levels with detailed diagnostics capabilities
+- **Progress Tracking**: Real-time progress visualization with detailed status updates
+- **Resource Management**: Efficient cleanup and memory management
+- **Flexible Output**: Configurable output formats with filtering options
 
 ## Installation
 
-To install DeepDNS, clone the repository and run the install command:
+To install DeepDNS globally, run:
 
-```shell
-sudo ./deepdns.sh install
+```bash
+sudo deepdns install
 ```
 
 ## Usage
 
-DeepDNS offers a variety of scanning options to suit different needs. Below are the available commands and options:
+Basic usage:
 
-```shell
-# Basic command:
-./deepdns.sh <domain>
-
-# Example:
-./deepdns.sh example.com
+```bash
+deepdns -d example.com
 ```
 
-### Options
+### Core Options
 
-- `-d <domain>`: Specify the target domain.
-- `-p`: Perform a passive scan using APIs.
-- `-a`: Perform an active scan.
-- `-w <wordlist>`: Use a custom wordlist for brute-force attacks.
-- `-o <output file>`: Output results to a specified file.
-- `-R <resolvers file>`: Use a custom DNS resolvers file.
-- `-r <depth>`: Set the recursion depth for scanning subdomains.
-- `-v`: Enable verbose mode.
-- `-h`: Display help message.
+- `-h, --help`               : Show help message.
+- `-v, --version`            : Show version information.
+- `-D, --debug [file]`       : Enable debug mode (default log file: `~/.deepdns/logs/debug.log`).
+- `-V, --verbose`            : Enable verbose output.
 
-## Examples
+### Scan Options
 
-### Basic Scan
+- `-d, --domain <domain>`         : Target domain to scan
+- `-w, --wordlist <file>`         : Custom wordlist file
+- `-o, --output <file>`           : Output file location
+- `-R, --resolver <file>`         : Custom DNS resolver file
+- `-t, --threads <number>`        : Thread count (1-100, default: 10)
+- `-p, --passive`                 : Enable passive scanning
+- `-a, --active`                  : Enable active scanning
+- `-r, --recursive [depth]`       : Enable recursive scanning
+- `--pattern`                     : Enable pattern recognition
+- `--vhost`                       : Enable virtual host scanning
+- `--vhost-port <ports>`          : Custom virtual host ports
+- `--vhost-filter <filter>`       : Response filtering options
+- `--vhost-filter-value <value>`  : Filter criteria value
+- `--raw`                         : Enable raw output format
 
-```shell
-./deepdns.sh example.com
-```
+### Management Commands
 
-### Passive Scan
+- `install`     : Install DeepDNS globally.
+- `update`      : Update DeepDNS to the latest version.
+- **Basic scan**:
 
-```shell
-./deepdns.sh -d example.com -p
-```
+  ```bash
+  deepdns example.com
+  ```
 
-### Active Scan
+- **Passive scan**:
 
-```shell
-./deepdns.sh -d example.com -a
-```
+  ```bash
+  deepdns -d example.com -p
+  ```
 
-### Full Scan with Custom Options
+- **Recursive active scan with pattern recognition**:
 
-```shell
-./deepdns.sh -d example.com -a -p -w wordlist.txt -o output.txt -R resolvers.txt -r 3
-```
+  ```bash
+  deepdns -d example.com -a --pattern -r 2
+  ```
 
-## API Configuration
+- **Full scan with custom settings**:
 
-To utilize APIs like SecurityTrails,VirusTotal and Censys, set your API keys in the script or export them as environment variables:
+  ```bash
+  deepdns -d example.com -a -t 20 \
+    -w wordlist.txt -o output.txt \
+    -R resolvers.txt -p -r 3 \
+    --vhost --vhost-port 80,443,8000,8443 \
+    --vhost-filter status --vhost-filter-value 200
+  ```
 
-- **SecurityTrails API key:** `SECURITYTRAILS_API_KEY`
-- **VirusTotal API key:** `VIRUSTOTAL_API_KEY`
-- **Censys API ID:** `CENSYS_API_ID`
-- **Censys API Secret:** `CENSYS_API`
+## Updates and Uninstallation
 
-## License
+- **Update DeepDNS**:
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+  ```bash
+  sudo deepdns update
+  ```
+
+- **Uninstall DeepDNS**:
+
+  ```bash
+  sudo deepdns uninstall
+  ```
 
 ## Contributing
 
-Contributions are welcome! Please open an issue or submit a pull request for any improvements or bug fixes.
+Contributions are welcome! Please open an issue or submit a pull request on [GitHub](https://github.com/ErvisTusha/deepdns).
 
-## Author
+## License
 
-Ervis Tusha
+DeepDNS is released under the [MIT License](LICENSE).
 
-- **GitHub:** [https://github.com/ErvisTusha/deepdns](https://github.com/ErvisTusha/deepdns)
-- **Twitter:** [@ET](https://www.x.com/ET)
-- **LinkedIn:** [Ervis Tusha](https://www.linkedin.com/in/ervis-tusha)
-- **Website:** [https://www.ervistusha.com](https://www.ervistusha.com)
-- **Email:** [ErvisTusha@gmail.com](mailto:ErvisTusha@gmail.com)
+## Contact
+
+- **Author**: Ervis Tusha
+- **GitHub**: [https://github.com/ErvisTusha/deepdns](https://github.com/ErvisTusha/deepdns)
+- **X**: [https://x.com/ET](https://x.com/ET)
+- **Email**: [ ervistusha@gmail.com]
