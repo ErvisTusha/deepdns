@@ -22,7 +22,7 @@ declare -g START_TIME=$(date +%s)
 declare -g TEMP_DIR=""
 declare -g VERBOSE=false
 declare -g DEBUG=false
-declare -g VERSION="2.0.0"
+declare -g VERSION="3.0.0"
 declare -g AUTHOR="Ervis Tusha"
 
 # Default settings
