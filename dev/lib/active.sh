@@ -11,10 +11,10 @@ WILDCARD_DETECTION() {
     fi
 
     for ATTEMPT in $(seq 1 $ATTEMPTS); do
-        local RANDOM_SUBDOMAIN="WILDCARD-$(openssl rand -hex 10)"
+        local RANDOM_SUBDOMAIN="WILDCARD-$(GENERATE_RANDOM 20 mixed)"
         local DNS_RESULT
 
-        if ! DNS_RESULT=$(dig +short "$RANDOM_SUBDOMAIN.$DOMAIN" 2>/dev/null); then
+        if ! DNS_RESULT=$(dig +short "$RANDOM_SUBDOMAIN.$DOMAIN" +time=2 +tries=1 2>/dev/null); then
             echo -e "${RED}[ERROR] DNS QUERY FAILED FOR $RANDOM_SUBDOMAIN.$DOMAIN${NC}"
             LOG "ERROR" "DNS QUERY FAILED FOR $RANDOM_SUBDOMAIN.$DOMAIN"
             continue
@@ -32,12 +32,14 @@ WILDCARD_DETECTION() {
         if [[ "$RECURSIVE_SCAN_ENABLED" == false ]]; then
             echo -e "${INDENT}${YELLOW}${BOLD}[!]${NC} Wildcard DNS detected for $DOMAIN${NC}"
             echo -e "${INDENT}${YELLOW}${BOLD}[!]${NC} This may generate false positives${NC}"
-            read -p "$(echo -e "${INDENT}${YELLOW}${BOLD}[?]${NC} Do you want to continue scanning? [y/N]: ")" CONTINUE
+            ASK_USER "$(echo -e "${INDENT}${YELLOW}${BOLD}[?]${NC} Do you want to continue scanning? [y/N]:")"
+            CONTINUE_STATUS=$?
         else
-            read -p "$(echo -e "${INDENT}${YELLOW}${BOLD}[!]${NC} Wildcard DNS detected, do you want to continue scanning? [y/N]: ")" CONTINUE
+            ASK_USER "$(echo -e "${INDENT}${YELLOW}${BOLD}[!]${NC} Wildcard DNS detected, do you want to continue scanning? [y/N]:")"
+            CONTINUE_STATUS=$?
         fi
 
-        if [[ ! "$CONTINUE" =~ ^[Yy]$ ]]; then
+        if [[ $CONTINUE_STATUS -ne 0 ]]; then
             echo -e "${INDENT}${RED}${BOLD}[!]${NC} SCAN ABORTED BY USER${NC}"
             return 2
         fi
@@ -84,7 +86,7 @@ VHOST_WILDCARD_DETECTION() {
     LOG "DEBUG" "Starting VHOST wildcard detection for $DOMAIN on $PROTOCOL://$DOMAIN_IP:$PORT"
 
     for ATTEMPT in $(seq 1 $ATTEMPTS); do
-        local RANDOM_VHOST="wildcard-$(openssl rand -hex 10).${DOMAIN}"
+        local RANDOM_VHOST="wildcard-$(GENERATE_RANDOM 20 mixed).${DOMAIN}"
 
         # Get baseline response with random vhost
         local RESPONSE=$(curl -s -I \
@@ -96,8 +98,8 @@ VHOST_WILDCARD_DETECTION() {
 
         local STATUS=$(echo "$RESPONSE" | grep -E "^HTTP" | cut -d' ' -f2)
 
-        # If we get a successful response (200 or 300s) for a random hostname, it's likely a wildcard
-        if IS_NUMBER "$STATUS"; then
+        # Successful responses for random hosts are strong wildcard signals.
+        if [[ "$STATUS" =~ ^[23][0-9][0-9]$ ]]; then
             WILDCARD_DETECTED=true
             break
         fi
@@ -109,12 +111,14 @@ VHOST_WILDCARD_DETECTION() {
         if [[ "$RECURSIVE_SCAN_ENABLED" == false ]]; then
             echo -e "${INDENT}${YELLOW}${BOLD}[!]${NC} Virtual host wildcard detected for $DOMAIN on port $PORT"
             echo -e "${INDENT}${YELLOW}${BOLD}[!]${NC} Server responds to non-existent vhosts - results may be unreliable"
-            read -p "$(echo -e "${INDENT}${YELLOW}${BOLD}[?]${NC} Do you want to continue scanning? [y/N]: ")" CONTINUE
+            ASK_USER "$(echo -e "${INDENT}${YELLOW}${BOLD}[?]${NC} Do you want to continue scanning? [y/N]:")"
+            CONTINUE_STATUS=$?
         else
-            read -p "$(echo -e "${INDENT}${YELLOW}${BOLD}[!]${NC} Virtual host wildcard detected, continue scanning? [y/N]: ")" CONTINUE
+            ASK_USER "$(echo -e "${INDENT}${YELLOW}${BOLD}[!]${NC} Virtual host wildcard detected, continue scanning? [y/N]:")"
+            CONTINUE_STATUS=$?
         fi
 
-        if [[ ! "$CONTINUE" =~ ^[Yy]$ ]]; then
+        if [[ $CONTINUE_STATUS -ne 0 ]]; then
             echo -e "${INDENT}${RED}${BOLD}[!]${NC} VHOST SCAN ABORTED BY USER"
             return 2
         fi
@@ -143,7 +147,7 @@ PROCESS_ACTIVE_CHUNK() {
         local RESOLVER=${RESOLVERS[$((RANDOM % ${#RESOLVERS[@]}))]}
         LOG "DEBUG" "Testing subdomain: $TARGET using resolver: $RESOLVER"
 
-        if dig +short "$TARGET" "@$RESOLVER" | grep -q '^[0-9]'; then
+        if dig +short "$TARGET" "@$RESOLVER" +time=2 +tries=1 | grep -q '^[0-9]'; then
             LOG "INFO" "Found valid subdomain: $TARGET"
             echo -e "${INDENT}     ${GREEN}${BOLD}[+]${NC} Found: $TARGET"
             echo "$TARGET" >> "$CHUNK_RESULTS"
@@ -186,6 +190,11 @@ ACTIVE_SCAN() {
         [[ "$RECURSIVE_SCAN_ENABLED" == false ]] && echo -e "${INDENT}${YELLOW}${BOLD}[*]${NC} Starting parallel wordlist bruteforce..."
         local TOTAL_WORDS=$(wc -l <"$WORDLIST_PATH")
         LOG "DEBUG" "Using wordlist: $WORDLIST_PATH with $TOTAL_WORDS entries"
+        if [[ "$TOTAL_WORDS" -eq 0 ]]; then
+            LOG "ERROR" "Wordlist is empty: $WORDLIST_PATH"
+            echo -e "${RED}${BOLD}[ERROR]${NC} Wordlist is empty: $WORDLIST_PATH"
+            return 1
+        fi
 
         # Create thread directory with proper permissions and cleanup handler
         local THREAD_DIR="$TEMP_DIR/threads"
@@ -280,7 +289,11 @@ ACTIVE_SCAN() {
         LOG "DEBUG" "All threads finished execution"
 
         # Merge results from all chunks
-        cat "$THREAD_DIR"/results_* >"$RESULTS_FILE" 2>/dev/null
+        if find "$THREAD_DIR" -name "results_*" -type f | grep -q .; then
+            cat "$THREAD_DIR"/results_* >"$RESULTS_FILE" 2>/dev/null
+        else
+            : >"$RESULTS_FILE"
+        fi
 
         # Count total unique results
         local TOTAL=$(sort -u "$RESULTS_FILE" | wc -l)
@@ -296,7 +309,6 @@ ACTIVE_SCAN() {
     return 0
 }
 
-# Add helper function for status colors
 GET_STATUS_COLOR() {
     local STATUS=$1
     case $STATUS in
@@ -319,7 +331,6 @@ PROCESS_VHOST_CHUNK() {
     echo "0" >"$PROGRESS_FILE"
 
     # Determine protocol based on port
-    local PROTOCOL="http"
     local PROTOCOL=$(DETECT_PROTOCOL "${DOMAIN_IP}" "${PORT}")
 
     while IFS= read -r SUBDOMAIN; do
@@ -365,20 +376,20 @@ PROCESS_VHOST_CHUNK() {
                     IFS=',' read -ra FILTERS <<<"$VHOST_FILTER"
                     for FILTER in "${FILTERS[@]}"; do
                         # If any filter matches, hide the result
-                        [[ "$STATUS" =~ ^($FILTER)$ ]] && SHOW_RESULT=false && break
+                        [[ "$STATUS" == "$FILTER" ]] && SHOW_RESULT=false && break
                     done
                     ;;
                 "size")
                     IFS=',' read -ra FILTERS <<<"$VHOST_FILTER"
                     for FILTER in "${FILTERS[@]}"; do
                         if [[ "$FILTER" =~ ^[0-9]+$ ]]; then
-                            [[ "$SIZE" -eq "$FILTER" ]] && SHOW_RESULT=false && break
+                            [[ "$SIZE" =~ ^[0-9]+$ && "$SIZE" -eq "$FILTER" ]] && SHOW_RESULT=false && break
                         elif [[ "$FILTER" =~ ^\<[0-9]+$ ]]; then
                             local VAL=${FILTER#<}
-                            [[ "$SIZE" -lt "$VAL" ]] && SHOW_RESULT=false && break
+                            [[ "$SIZE" =~ ^[0-9]+$ && "$SIZE" -lt "$VAL" ]] && SHOW_RESULT=false && break
                         elif [[ "$FILTER" =~ ^\>[0-9]+$ ]]; then
                             local VAL=${FILTER#>}
-                            [[ "$SIZE" -gt "$VAL" ]] && SHOW_RESULT=false && break
+                            [[ "$SIZE" =~ ^[0-9]+$ && "$SIZE" -gt "$VAL" ]] && SHOW_RESULT=false && break
                         fi
                     done
                     ;;
@@ -443,7 +454,6 @@ VHOST_SCAN() {
     local FOUND_COUNT=0
     local INDENT="$3"
 
-    # Array of common browser User-Agents
     local USER_AGENTS=(
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Safari/605.1.15"
@@ -461,28 +471,7 @@ VHOST_SCAN() {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Brave/89.0"
         "Mozilla/5.0 (X11; Linux x86_64; rv:89.0) Gecko/20100101 Brave/89.0"
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Edge/91.0.864.59"
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Safari/605.1.15"
         "Mozilla/5.0 (Linux; Android 11; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Mobile Safari/537.36"
-        "Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Mobile/15E148 Safari/604.1"
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Safari/605.1.15"
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0"
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-        "Mozilla/5.0 (X11; Linux x86_64; rv:89.0) Gecko/20100101 Firefox/89.0"
-        "Mozilla/5.0 (Linux; Android 10; SM-G973F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Mobile Safari/537.36"
-        "Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Mobile/15E148 Safari/604.1"
-        "Mozilla/5.0 (Linux; Android 10; Pixel 3) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Mobile Safari/537.36"
-        "Mozilla/5.0 (iPad; CPU OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Mobile/15E148 Safari/604.1"
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Brave/91.0.4472.124 Chrome/91.0.4472.124 Safari/537.36"
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Brave/91.0.4472.124 Chrome/91.0.4472.124 Safari/537.36"
-        "Mozilla/5.0 (Linux; Android 10; SM-G973F) AppleWebKit/537.36 (KHTML, like Gecko) Brave/91.0.4472.124 Mobile Safari/537.36"
-        "Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Brave/91.0.4472.124 Mobile/15E148 Safari/604.1"
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Brave/89.0"
-        "Mozilla/5.0 (X11; Linux x86_64; rv:89.0) Gecko/20100101 Brave/89.0"
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Edge/91.0.864.59"
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Safari/605.1.15"
-        "Mozilla/5.0 (Linux; Android 11; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Mobile Safari/537.36"
-        "Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Mobile/15E148 Safari/604.1"
     )
 
     if [[ "$RECURSIVE_SCAN_ENABLED" == false ]]; then
@@ -493,6 +482,11 @@ VHOST_SCAN() {
 
     LOG "INFO" "Starting VHOST scan for $DOMAIN"
     local TOTAL_WORDS=$(wc -l <"$WORDLIST_PATH")
+    if [[ "$TOTAL_WORDS" -eq 0 ]]; then
+        LOG "ERROR" "Wordlist is empty: $WORDLIST_PATH"
+        echo -e "${RED}${BOLD}[ERROR]${NC} Wordlist is empty: $WORDLIST_PATH"
+        return 1
+    fi
     local THREAD_DIR="$TEMP_DIR/vhost_threads"
     mkdir -p "$THREAD_DIR"
 
@@ -507,7 +501,7 @@ VHOST_SCAN() {
 
     #if domain is not found in hosts file, use dig to resolve it
     if [ -z "$DOMAIN_IP" ]; then
-        DOMAIN_IP=$(dig +short "$DOMAIN" | head -n1)
+        DOMAIN_IP=$(dig +short "$DOMAIN" A | grep -E '^([0-9]{1,3}\.){3}[0-9]{1,3}$' | head -n1)
     fi
 
     #if domain is still not resolved, skip the chunk

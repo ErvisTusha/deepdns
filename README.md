@@ -15,6 +15,9 @@
 - **Multithreading**: High-performance concurrent processing with adjustable thread counts
 - **Smart Resolver Management**: Automatic resolver health monitoring and rotation
 - **API Integration**: Seamless integration with SecurityTrails, VirusTotal, and Censys
+- **Expanded Passive Sources**: Certificate Transparency, AlienVault OTX, HackerTarget, URLScan, and Wayback CDX
+- **DNS Security Checks**: Optional zone transfer and DNSSEC posture checks
+- **Pentest Findings**: Optional takeover, DNS, mail, HTTP, TLS, and cloud/CDN checks with evidence files
 - **Robust Error Handling**: Graceful interrupt handling and comprehensive error recovery
 - **Protocol Detection**: Automatic HTTP/HTTPS protocol detection for virtual host scanning
 - **Advanced Logging**: Multiple log levels with detailed diagnostics capabilities
@@ -50,17 +53,28 @@ deepdns -d example.com
 - `-d, --domain <domain>`         : Target domain to scan
 - `-w, --wordlist <file>`         : Custom wordlist file
 - `-o, --output <file>`           : Output file location
+- `--format <txt|json|csv>`       : Output format
 - `-R, --resolver <file>`         : Custom DNS resolver file
 - `-t, --threads <number>`        : Thread count (1-100, default: 10)
 - `-p, --passive`                 : Enable passive scanning
 - `-a, --active`                  : Enable active scanning
 - `-r, --recursive [depth]`       : Enable recursive scanning
 - `--pattern`                     : Enable pattern recognition
+- `--zone-transfer`               : Attempt DNS zone transfer checks
+- `--dnssec`                      : Run DNSSEC posture checks
+- `--pentest`                     : Run penetration-testing checks
+- `--profile <safe|balanced|aggressive>` : Pentest profile
+- `--checks <list>`               : Comma-separated pentest checks
+- `--evidence-dir <dir>`          : Raw evidence output directory
 - `--vhost`                       : Enable virtual host scanning
 - `--vhost-port <ports>`          : Custom virtual host ports
 - `--vhost-filter <filter>`       : Response filtering options
-- `--vhost-filter-value <value>`  : Filter criteria value
+- `--vhost-filter-type <type>`    : Filter type (`status`, `size`, `words`, or `lines`)
 - `--raw`                         : Enable raw output format
+
+### Update Verification
+
+DeepDNS supports signed release verification for `update`. Set `RELEASE_SIGNING_FINGERPRINT` in `dev/config/settings.sh` or the generated script, publish `${REPO_URL}.asc`, and optionally publish the public key at `RELEASE_SIGNING_KEY_URL`. Set `RELEASE_SIGNATURE_REQUIRED=true` to fail closed when the signature cannot be verified.
 
 ### Management Commands
 
@@ -91,7 +105,8 @@ deepdns -d example.com
     -w wordlist.txt -o output.txt \
     -R resolvers.txt -p -r 3 \
     --vhost --vhost-port 80,443,8000,8443 \
-    --vhost-filter status --vhost-filter-value 200
+    --vhost-filter 200 --vhost-filter-type status \
+    --zone-transfer --dnssec --pentest --profile safe --format json
   ```
 
 ## Updates and Uninstallation
@@ -107,6 +122,14 @@ deepdns -d example.com
   ```bash
   sudo deepdns uninstall
   ```
+
+## Testing
+
+Run the unit tests with:
+
+```bash
+bash dev/test/test.sh
+```
 
 ## Contributing
 

@@ -1,5 +1,6 @@
 #!/bin/bash
 
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)/vendor/bashframe.sh"
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)/config/settings.sh"
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)/lib/core.sh"
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)/lib/utils.sh"
@@ -7,16 +8,13 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)/lib/validation
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)/lib/dns.sh"
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)/lib/passive.sh"
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)/lib/active.sh"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)/lib/pentest.sh"
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)/lib/scan.sh"
 
-# Add trap for SIGINT and SIGTERM
 trap 'CLEANUP' SIGINT SIGTERM
 
 # Setup initial state
 CREATE_TEMP_DIR
-
-# Main execution flow
-SHOW_VERSION
 
 if [ $# -eq 0 ]; then
     SHOW_HELP
@@ -45,6 +43,7 @@ if [ $# -eq 1 ]; then
             ;;
         "-v" | "--version")
             LOG "INFO" "SHOW VERSION"
+            SHOW_VERSION
             exit 0
             ;;
         *)
@@ -54,6 +53,9 @@ if [ $# -eq 1 ]; then
                 ACTIVE_SCAN_ENABLED=true
                 PATTERN_RECOGNITION_ENABLED=true
                 VHOST_SCAN_ENABLED=true
+                ZONE_TRANSFER_ENABLED=true
+                DNSSEC_SCAN_ENABLED=true
+                PENTEST_SCAN_ENABLED=true
                 RECURSIVE_SCAN_ENABLED=false
             else
                 LOG "INFO" "SHOW_HELP - INVALID argument"
@@ -84,7 +86,7 @@ while [[ "$#" -gt 0 ]]; do
     -w | --wordlist)
         IS_EMPTY "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Wordlist argument missing${NC}\n" && LOG "ERROR" "Wordlist argument missing" && exit 1
         ! FILE_EXISTS "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Wordlist file not found: $2${NC}\n" && LOG "ERROR" "Wordlist file not found: $2" && exit 1
-        ! FILE_READABLE "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}File is not readable : $2${NC}\n" && LOG "ERROR" "Wordlist file not readable: $2" && exit 1
+        ! IS_READABLE "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}File is not readable : $2${NC}\n" && LOG "ERROR" "Wordlist file not readable: $2" && exit 1
         WORDLIST_PATH="$2"
         shift
         ;;
@@ -93,18 +95,34 @@ while [[ "$#" -gt 0 ]]; do
         OUTPUT="$2"
         shift
         ;;
-    -r | --recursive)
-        RECURSIVE_SCAN=true
-        IS_EMPTY "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Recursive depth argument missing${NC}\n" && LOG "ERROR" "Recursive depth argument missing" && exit 1
-        ! IS_NUMBER "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Invalid recursive depth: $2${NC}\n" && LOG "ERROR" "Invalid recursive depth: $2" && exit 1
-        if [ "$2" -gt 0 ] && [ "$2" -lt 11 ]; then
-            RECURSIVE_DEPTH="$2"
-        else
-            LOG "ERROR" "Recursive depth must be between 1 and 10"
-            echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Recursive depth must be between 1 and 10${NC}\n"
-            exit 1
-        fi
+    --format)
+        IS_EMPTY "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Output format missing${NC}\n" && LOG "ERROR" "Output format missing" && exit 1
+        case "${2,,}" in
+            txt | json | csv)
+                OUTPUT_FORMAT="${2,,}"
+                ;;
+            *)
+                echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Invalid output format. Use: txt, json, or csv${NC}\n"
+                LOG "ERROR" "Invalid output format: $2"
+                exit 1
+                ;;
+        esac
         shift
+        ;;
+    -r | --recursive)
+        RECURSIVE_SCAN_ENABLED=true
+        RECURSIVE_DEPTH="$DEFAULT_RECURSIVE_DEPTH"
+        if [[ -n "$2" && ! "$2" =~ ^- ]]; then
+            ! IS_NUMBER "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Invalid recursive depth: $2${NC}\n" && LOG "ERROR" "Invalid recursive depth: $2" && exit 1
+            if [ "$2" -gt 0 ] && [ "$2" -lt 11 ]; then
+                RECURSIVE_DEPTH="$2"
+            else
+                LOG "ERROR" "Recursive depth must be between 1 and 10"
+                echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Recursive depth must be between 1 and 10${NC}\n"
+                exit 1
+            fi
+            shift
+        fi
         ;;
     -p | --passive)
         PASSIVE_SCAN_ENABLED=true
@@ -116,7 +134,7 @@ while [[ "$#" -gt 0 ]]; do
     -R | --resolver)
         IS_EMPTY "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Resolver file argument missing${NC}\n" && LOG "ERROR" "Resolver file argument missing" && exit 1
         ! FILE_EXISTS "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Resolver file not found: $2${NC}\n" && LOG "ERROR" "Resolver file not found: $2" && exit 1
-        ! FILE_READABLE "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}File is not readable : $2${NC}\n" && LOG "ERROR" "Resolver file not readable: $2" && exit 1
+        ! IS_READABLE "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}File is not readable : $2${NC}\n" && LOG "ERROR" "Resolver file not readable: $2" && exit 1
         FILE_EMPTY "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Resolver file is empty : $2${NC}\n" && LOG "ERROR" "Resolver file is empty: $2" && exit 1
 
         RESOLVER_SCAN=true
@@ -154,6 +172,42 @@ while [[ "$#" -gt 0 ]]; do
     --pattern)
         PATTERN_RECOGNITION_ENABLED=true
         ;;
+    --zone-transfer)
+        ZONE_TRANSFER_ENABLED=true
+        ;;
+    --dnssec)
+        DNSSEC_SCAN_ENABLED=true
+        ;;
+    --pentest)
+        PENTEST_SCAN_ENABLED=true
+        ;;
+    --profile)
+        IS_EMPTY "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Pentest profile missing${NC}\n" && LOG "ERROR" "Pentest profile missing" && exit 1
+        case "${2,,}" in
+            safe | balanced | aggressive)
+                PENTEST_PROFILE="${2,,}"
+                PENTEST_SCAN_ENABLED=true
+                ;;
+            *)
+                echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Invalid pentest profile. Use: safe, balanced, or aggressive${NC}\n"
+                LOG "ERROR" "Invalid pentest profile: $2"
+                exit 1
+                ;;
+        esac
+        shift
+        ;;
+    --checks)
+        IS_EMPTY "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Pentest checks list missing${NC}\n" && LOG "ERROR" "Pentest checks list missing" && exit 1
+        PENTEST_CHECKS="${2,,}"
+        PENTEST_SCAN_ENABLED=true
+        shift
+        ;;
+    --evidence-dir)
+        IS_EMPTY "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Evidence directory missing${NC}\n" && LOG "ERROR" "Evidence directory missing" && exit 1
+        PENTEST_EVIDENCE_DIR="$2"
+        PENTEST_SCAN_ENABLED=true
+        shift
+        ;;
     --vhost-port)
         IS_EMPTY "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Port list missing${NC}\n" && LOG "ERROR" "Port list missing" && exit 1
         # Remove duplicate ports using sort -u
@@ -190,6 +244,12 @@ while [[ "$#" -gt 0 ]]; do
         esac
         shift
         ;;
+    --vhost-filter-value)
+        IS_EMPTY "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Filter value argument missing${NC}\n" && LOG "ERROR" "Filter value argument missing" && exit 1
+        VHOST_FILTER=$(echo "$2" | tr ',' '\n' | sort -u | tr '\n' ',' | sed 's/,$//')
+        LOG "DEBUG" "Using unique filters: $VHOST_FILTER"
+        shift
+        ;;
     -t | --threads)
         IS_EMPTY "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Thread count missing${NC}\n" && LOG "ERROR" "Thread count missing" && exit 1
         ! IS_NUMBER "$2" && echo -e "\n${RED}${BOLD}[ERROR]${NC} ${BOLD}Invalid thread count: $2${NC}\n" && LOG "ERROR" "Invalid thread count: $2" && exit 1
@@ -215,11 +275,6 @@ done
 
 # Main execution
 if [ "$DEBUG" = true ]; then
-    # Override debug log if provided
-    if [[ -n "$2" ]]; then
-        DEBUG_LOG="$2"
-    fi
-
     # Ensure log directory exists
     mkdir -p "$(dirname "$DEBUG_LOG")"
 

@@ -21,8 +21,13 @@ PASSIVE_SCAN() {
     local ST_RESULTS="$TEMP_DIR/${DOMAIN}_st.txt"
     local CRT_RESULTS="$TEMP_DIR/${DOMAIN}_crt.txt"
     local VT_RESULTS="$TEMP_DIR/${DOMAIN}_vt.txt"
+    local CENSYS_RESULTS="$TEMP_DIR/${DOMAIN}_censys.txt"
+    local OTX_RESULTS="$TEMP_DIR/${DOMAIN}_otx.txt"
+    local HACKERTARGET_RESULTS="$TEMP_DIR/${DOMAIN}_hackertarget.txt"
+    local URLSCAN_RESULTS="$TEMP_DIR/${DOMAIN}_urlscan.txt"
+    local WAYBACK_RESULTS="$TEMP_DIR/${DOMAIN}_wayback.txt"
 
-    touch "$ST_RESULTS" "$CRT_RESULTS" "$VT_RESULTS" || {
+    touch "$ST_RESULTS" "$CRT_RESULTS" "$VT_RESULTS" "$CENSYS_RESULTS" "$OTX_RESULTS" "$HACKERTARGET_RESULTS" "$URLSCAN_RESULTS" "$WAYBACK_RESULTS" || {
         LOG "ERROR" "Failed to create temporary files"
         echo -e "${RED}${BOLD}[ERROR]${NC} Failed to create temporary files"
         return 1
@@ -59,7 +64,33 @@ PASSIVE_SCAN() {
         echo -e "${RED}${BOLD}[!]${NC} VirusTotal: Skipped (no API key)"
     fi
 
-    cat "$ST_RESULTS" "$CRT_RESULTS" "$VT_RESULTS" 2>/dev/null | grep -E "^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$" | sort -u | while read -r TARGET; do
+    echo -e "${YELLOW}${BOLD}[*]${NC} Querying Censys API..."
+    LOG "DEBUG" "Querying Censys API"
+    if [[ -n "$CENSYS_API_ID" && -n "$CENSYS_API_SECRET" ]]; then
+        QUERY_CENSYS "$DOMAIN" >"$CENSYS_RESULTS"
+        local CENSYS_COUNT=$(wc -l <"$CENSYS_RESULTS")
+        echo -e "${GREEN}${BOLD}[✓]${NC} Censys: Found $CENSYS_COUNT subdomains"
+    else
+        echo -e "${RED}${BOLD}[!]${NC} Censys: Skipped (no credentials)"
+    fi
+
+    echo -e "${YELLOW}${BOLD}[*]${NC} Querying AlienVault OTX..."
+    QUERY_ALIENVAULT "$DOMAIN" >"$OTX_RESULTS"
+    echo -e "${GREEN}${BOLD}[✓]${NC} AlienVault OTX: Found $(wc -l <"$OTX_RESULTS") subdomains"
+
+    echo -e "${YELLOW}${BOLD}[*]${NC} Querying HackerTarget..."
+    QUERY_HACKERTARGET "$DOMAIN" >"$HACKERTARGET_RESULTS"
+    echo -e "${GREEN}${BOLD}[✓]${NC} HackerTarget: Found $(wc -l <"$HACKERTARGET_RESULTS") subdomains"
+
+    echo -e "${YELLOW}${BOLD}[*]${NC} Querying URLScan..."
+    QUERY_URLSCAN "$DOMAIN" >"$URLSCAN_RESULTS"
+    echo -e "${GREEN}${BOLD}[✓]${NC} URLScan: Found $(wc -l <"$URLSCAN_RESULTS") subdomains"
+
+    echo -e "${YELLOW}${BOLD}[*]${NC} Querying Wayback CDX..."
+    QUERY_WAYBACK "$DOMAIN" >"$WAYBACK_RESULTS"
+    echo -e "${GREEN}${BOLD}[✓]${NC} Wayback CDX: Found $(wc -l <"$WAYBACK_RESULTS") subdomains"
+
+    cat "$ST_RESULTS" "$CRT_RESULTS" "$VT_RESULTS" "$CENSYS_RESULTS" "$OTX_RESULTS" "$HACKERTARGET_RESULTS" "$URLSCAN_RESULTS" "$WAYBACK_RESULTS" 2>/dev/null | NORMALIZE_PASSIVE_RESULTS "$DOMAIN" | while read -r TARGET; do
         echo -e "${INDENT}     ${GREEN}${BOLD}[+]${NC} Found: $TARGET"
         echo "$TARGET" >>"$RESULTS_FILE"
     done
@@ -68,8 +99,29 @@ PASSIVE_SCAN() {
     [[ "$RECURSIVE_SCAN_ENABLED" == false ]] && echo -e "\n${GREEN}${BOLD}[✓]${NC} Passive scan complete: $TOTAL unique results found"
     LOG "INFO" "Passive scan complete: Found $TOTAL unique subdomains"
 
-    rm -f "$ST_RESULTS" "$CRT_RESULTS" "$VT_RESULTS"
+    rm -f "$ST_RESULTS" "$CRT_RESULTS" "$VT_RESULTS" "$CENSYS_RESULTS" "$OTX_RESULTS" "$HACKERTARGET_RESULTS" "$URLSCAN_RESULTS" "$WAYBACK_RESULTS"
     return 0
+}
+
+NORMALIZE_PASSIVE_RESULTS() {
+    local DOMAIN="$1"
+
+    sed 's/\r$//' |
+        tr ',' '\n' |
+        sed 's/^\*\.//' |
+        sed '/^$/d' |
+        awk -v domain="$DOMAIN" '
+            $0 == "null" { next }
+            /^[A-Za-z0-9-]+$/ { print tolower($0 "." domain); next }
+            /^[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/ {
+                target = tolower($0)
+                domain_l = tolower(domain)
+                if (target == domain_l || target ~ ("\\." domain_l "$")) {
+                    print target
+                }
+            }
+        ' |
+        sort -u
 }
 
 QUERY_SECURITYTRAILS() {
@@ -83,7 +135,7 @@ QUERY_SECURITYTRAILS() {
     fi
 
     local RESULT
-    RESULT=$(curl -s -H "APIKEY: $SECURITYTRAILS_API_KEY" "$API_URL")
+    RESULT=$(HTTP_GET "$API_URL" -H "APIKEY: $SECURITYTRAILS_API_KEY")
     echo "$RESULT" | jq -r '.subdomains[]' 2>/dev/null
     LOG "DEBUG" "SecurityTrails query completed for $DOMAIN"
 }
@@ -93,8 +145,8 @@ QUERY_CRTSH() {
     local API_URL="https://crt.sh/?q=%.${DOMAIN}&output=json"
 
     local RESULT
-    RESULT=$(curl -s "$API_URL")
-    echo "$RESULT" | jq -r '.[].name_value' 2>/dev/null | sort -u
+    RESULT=$(HTTP_GET "$API_URL")
+    echo "$RESULT" | jq -r '.[].name_value' 2>/dev/null | tr '\n' ',' | tr ',' '\n' | sort -u
 }
 
 QUERY_VIRUSTOTAL() {
@@ -107,6 +159,57 @@ QUERY_VIRUSTOTAL() {
     fi
 
     local RESULT
-    RESULT=$(curl -s -G --data-urlencode "apikey=$VIRUSTOTAL_API_KEY" --data-urlencode "domain=$DOMAIN" "$API_URL")
+    RESULT=$(curl --fail --silent --location --connect-timeout 5 --max-time 20 --retry 2 -G --data-urlencode "apikey=$VIRUSTOTAL_API_KEY" --data-urlencode "domain=$DOMAIN" "$API_URL")
     echo "$RESULT" | jq -r '.subdomains[]' 2>/dev/null
+}
+
+QUERY_CENSYS() {
+    local DOMAIN="$1"
+    local API_URL="https://search.censys.io/api/v2/hosts/search"
+
+    if [[ -z "$CENSYS_API_ID" || -z "$CENSYS_API_SECRET" ]]; then
+        LOG "WARNING" "Censys credentials not configured"
+        return 1
+    fi
+
+    local RESULT
+    RESULT=$(HTTP_POST_JSON "$API_URL" "{\"q\":\"services.tls.certificates.leaf_data.names: *.${DOMAIN} OR dns.names: *.${DOMAIN}\",\"per_page\":100}" "$CENSYS_API_ID:$CENSYS_API_SECRET")
+
+    echo "$RESULT" | jq -r '.result.hits[]? | (.name? // empty), (.names[]? // empty), (.dns.names[]? // empty)' 2>/dev/null | sort -u
+}
+
+QUERY_ALIENVAULT() {
+    local DOMAIN="$1"
+    local API_URL="https://otx.alienvault.com/api/v1/indicators/domain/${DOMAIN}/passive_dns"
+    local RESULT
+
+    RESULT=$(HTTP_GET "$API_URL") || return 0
+    echo "$RESULT" | jq -r '.passive_dns[]? | .hostname?, .address?' 2>/dev/null | sort -u
+}
+
+QUERY_HACKERTARGET() {
+    local DOMAIN="$1"
+    local API_URL="https://api.hackertarget.com/hostsearch/?q=${DOMAIN}"
+    local RESULT
+
+    RESULT=$(HTTP_GET "$API_URL") || return 0
+    echo "$RESULT" | cut -d',' -f1 | sort -u
+}
+
+QUERY_URLSCAN() {
+    local DOMAIN="$1"
+    local API_URL="https://urlscan.io/api/v1/search/?q=domain:${DOMAIN}"
+    local RESULT
+
+    RESULT=$(HTTP_GET "$API_URL") || return 0
+    echo "$RESULT" | jq -r '.results[]? | .page.domain?, .task.domain?' 2>/dev/null | sort -u
+}
+
+QUERY_WAYBACK() {
+    local DOMAIN="$1"
+    local API_URL="https://web.archive.org/cdx?url=*.${DOMAIN}/*&output=json&fl=original&collapse=urlkey"
+    local RESULT
+
+    RESULT=$(HTTP_GET "$API_URL") || return 0
+    echo "$RESULT" | jq -r '.[1:][]? | .[0]?' 2>/dev/null | sed 's#https\?://##' | cut -d/ -f1 | sort -u
 }

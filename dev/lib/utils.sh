@@ -1,40 +1,5 @@
 #!/bin/bash
 
-FILE_EMPTY() {
-    if [[ -z "$1" ]]; then
-        [[ "$VERBOSE" == "true" ]] && echo "ERROR: No file provided"
-        [[ "$DEBUG" == "true" ]] && echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: No file provided" >>"$DEBUG_LOG"
-        return 1
-    fi
-    if [[ -s "$1" ]]; then
-        [[ "$VERBOSE" == "true" ]] && echo "INFO: File $1 is not empty"
-        [[ "$DEBUG" == "true" ]] && echo "$(date '+%Y-%m-%d %H:%M:%S') INFO: File $1 is not empty" >>"$DEBUG_LOG"
-        return 1
-    else
-        [[ "$VERBOSE" == "true" ]] && echo "INFO: File $1 is empty"
-        [[ "$DEBUG" == "true" ]] && echo "$(date '+%Y-%m-%d %H:%M:%S') INFO: File $1 is empty" >>"$DEBUG_LOG"
-        return 0
-    fi
-}
-
-IS_INSTALLED() {
-    if [[ -z "$1" ]]; then
-        [[ "$VERBOSE" == "true" ]] && echo "ERROR: No package name provided"
-        [[ "$DEBUG" == "true" ]] && echo "$(date '+%Y-%m-%d %H:%S') ERROR: No package name provided" >>"$DEBUG_LOG"
-        return 1
-    fi
-
-    if command -v "$1" &>/dev/null; then
-        [[ "$VERBOSE" == "true" ]] && echo "INFO: Package $1 is installed"
-        [[ "$DEBUG" == "true" ]] && echo "$(date '+%Y-%m-%d %H:%M:%S') INFO: Package $1 is installed" >>"$DEBUG_LOG"
-        return 0
-    else
-        [[ "$VERBOSE" == "true" ]] && echo "INFO: Package $1 is not installed"
-        [[ "$DEBUG" == "true" ]] && echo "$(date '+%Y-%m-%d %H:%M:%S') INFO: Package $1 is not installed" >>"$DEBUG_LOG"
-        return 1
-    fi
-}
-
 INSTALL_SCRIPT() {
     LOG "INFO" "Starting DeepDNS installation"
 
@@ -62,7 +27,20 @@ INSTALL_SCRIPT() {
         return 0
     fi
 
-    if sudo install -m 0755 -o root -g root "$0" /usr/local/bin/deepdns; then
+    local INSTALL_SOURCE="$0"
+    local SCRIPT_BASE
+    SCRIPT_BASE="$(basename "$0")"
+    if [[ "$SCRIPT_BASE" == "deepdns" && -f "$(cd "$(dirname "$0")/.." >/dev/null 2>&1 && pwd)/deepdns.sh" ]]; then
+        INSTALL_SOURCE="$(cd "$(dirname "$0")/.." >/dev/null 2>&1 && pwd)/deepdns.sh"
+    fi
+
+    if ! bash -n "$INSTALL_SOURCE"; then
+        echo -e "${RED}${BOLD}[✗]${NC} Install source failed syntax check: $INSTALL_SOURCE"
+        LOG "ERROR" "Installation failed - syntax check failed for $INSTALL_SOURCE"
+        return 1
+    fi
+
+    if sudo install -m 0755 -o root -g root "$INSTALL_SOURCE" /usr/local/bin/deepdns; then
         echo -e "${GREEN}${BOLD}[✓]${NC} Successfully installed DeepDNS:"
         echo -e "   ${CYAN}${BOLD}→${NC} Binary: /usr/local/bin/deepdns"
         echo -e "   ${CYAN}${BOLD}→${NC} Config: $HOME_DIR"
@@ -98,20 +76,45 @@ UPDATE_SCRIPT() {
         return 1
     fi
 
-    # Check for curl
-    if ! command -v curl &>/dev/null; then
-        echo -e "${RED}${BOLD}[ERROR]${NC} curl is required but not installed"
-        LOG "ERROR" "Update failed - curl not found"
-        return 1
-    fi
-
     # Download and update
     local TEMP_FILE=$(mktemp)
-    if curl -sL "$REPO_URL" -o "$TEMP_FILE"; then
+    local SIG_FILE="${TEMP_FILE}.asc"
+    local KEY_FILE=""
+    if DOWNLOAD "$REPO_URL" "$TEMP_FILE"; then
+        if [[ "$RELEASE_SIGNATURE_REQUIRED" == true || -n "$RELEASE_SIGNING_FINGERPRINT" ]]; then
+            if ! DOWNLOAD "$RELEASE_SIGNATURE_URL" "$SIG_FILE"; then
+                rm -f "$TEMP_FILE" "$SIG_FILE"
+                echo -e "${RED}${BOLD}[✗]${NC} Failed to download release signature"
+                LOG "ERROR" "Update failed - release signature download error"
+                return 1
+            fi
+
+            if [[ -n "$RELEASE_SIGNING_KEY_URL" ]]; then
+                KEY_FILE="${TEMP_FILE}.gpg"
+                DOWNLOAD "$RELEASE_SIGNING_KEY_URL" "$KEY_FILE" >/dev/null 2>&1 || KEY_FILE=""
+            fi
+
+            if ! VERIFY_RELEASE_SIGNATURE "$TEMP_FILE" "$SIG_FILE" "$KEY_FILE" "$RELEASE_SIGNING_FINGERPRINT"; then
+                rm -f "$TEMP_FILE" "$SIG_FILE" "$KEY_FILE"
+                echo -e "${RED}${BOLD}[✗]${NC} Release signature verification failed"
+                LOG "ERROR" "Update failed - release signature verification failed"
+                return 1
+            fi
+        else
+            echo -e "${YELLOW}${BOLD}[!]${NC} Release signature verification skipped (no signing fingerprint configured)"
+            LOG "WARNING" "Release signature verification skipped"
+        fi
+
         # Extract version from downloaded file
         NEW_VERSION=$(grep "declare -g VERSION=" "$TEMP_FILE" | cut -d'"' -f2)
+        if [[ -z "$NEW_VERSION" ]] || ! grep -q '^#!/bin/bash' "$TEMP_FILE" || ! bash -n "$TEMP_FILE"; then
+            rm -f "$TEMP_FILE" "$SIG_FILE" "$KEY_FILE"
+            echo -e "${RED}${BOLD}[✗]${NC} Downloaded update failed validation"
+            LOG "ERROR" "Update failed - downloaded script failed validation"
+            return 1
+        fi
         if sudo cp "$TEMP_FILE" /usr/local/bin/deepdns && sudo chmod +x /usr/local/bin/deepdns; then
-            rm -f "$TEMP_FILE"
+            rm -f "$TEMP_FILE" "$SIG_FILE" "$KEY_FILE"
             echo -e "${GREEN}${BOLD}[✓]${NC} Successfully updated DeepDNS:"
             echo -e "   ${CYAN}${BOLD}→${NC} Binary: /usr/local/bin/deepdns"
             echo -e "   ${CYAN}${BOLD}→${NC} Updated: ${YELLOW}${BOLD}v${CURRENT_VERSION}${NC} ${GREEN}${BOLD}→${NC} ${YELLOW}${BOLD}v${NEW_VERSION}${NC}"
@@ -121,7 +124,7 @@ UPDATE_SCRIPT() {
         fi
     fi
 
-    rm -f "$TEMP_FILE"
+    rm -f "$TEMP_FILE" "$SIG_FILE" "$KEY_FILE"
     echo -e "${RED}${BOLD}[✗]${NC} Failed to update DeepDNS"
     LOG "ERROR" "Update failed - download/copy error"
     return 1
@@ -153,68 +156,6 @@ UNINSTALL_SCRIPT() {
     else
         echo -e "${RED}${BOLD}[✗]${NC} Failed to uninstall DeepDNS"
         LOG "ERROR" "Uninstall failed - removal error"
-        return 1
-    fi
-}
-
-FILE_READABLE() {
-    if [ -r "$1" ]; then
-        return 0
-    else
-        return 1
-    fi
-}
-
-FILE_WRITABLE() {
-    if [ -w "$1" ]; then
-        return 0
-    else
-        return 1
-    fi
-}
-
-IS_EMPTY() {
-    if [[ -z "$1" ]]; then
-        [[ "$VERBOSE" == "true" ]] && echo "INFO: Variable is empty"
-        [[ "$DEBUG" == "true" ]] && echo "$(date '+%Y-%m-%d %H:%M:%S') INFO: Variable is empty" >>"$DEBUG_LOG"
-        return 0
-    else
-        [[ "$VERBOSE" == "true" ]] && echo "INFO: Variable is not empty"
-        [[ "$DEBUG" == "true" ]] && echo "$(date '+%Y-%m-%d %H:%M:%S') INFO: Variable is not empty" >>"$DEBUG_LOG"
-        return 1
-    fi
-}
-
-IS_NUMBER() {
-    if [[ -z "$1" ]]; then
-        [[ "$VERBOSE" == "true" ]] && echo "ERROR: No variable provided"
-        [[ "$DEBUG" == "true" ]] && echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: No variable provided" >>"$DEBUG_LOG"
-        return 1
-    fi
-    if [[ "$1" =~ ^[0-9]+$ ]]; then
-        [[ "$VERBOSE" == "true" ]] && echo "INFO: $1 is numeric"
-        [[ "$DEBUG" == "true" ]] && echo "$(date '+%Y-%m-%d %H:%M:%S') INFO: $1 is numeric" >>"$DEBUG_LOG"
-        return 0
-    else
-        [[ "$VERBOSE" == "true" ]] && echo "INFO: $1 is not numeric"
-        [[ "$DEBUG" == "true" ]] && echo "$(date '+%Y-%m-%d %H:%M:%S') INFO: $1 is not numeric" >>"$DEBUG_LOG"
-        return 1
-    fi
-}
-
-FILE_EXISTS() {
-    if [[ -z "$1" ]]; then
-        [[ "$DEBUG" == "true" ]] && echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: No file provided" >>"$DEBUG_LOG"
-        [[ "$VERBOSE" == "true" ]] && echo "ERROR: No file provided"
-        return 1
-    fi
-    if [[ -f "$1" ]]; then
-        [[ "$VERBOSE" == "true" ]] && echo "INFO: File $1 exists"
-        [[ "$DEBUG" == "true" ]] && echo "$(date '+%Y-%m-%d %H:%M:%S') INFO: File $1 exists" >>"$DEBUG_LOG"
-        return 0
-    else
-        [[ "$VERBOSE" == "true" ]] && echo "INFO: File $1 does not exist"
-        [[ "$DEBUG" == "true" ]] && echo "$(date '+%Y-%m-%d %H:%M:%S') INFO: File $1 does not exist" >>"$DEBUG_LOG"
         return 1
     fi
 }

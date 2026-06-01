@@ -11,11 +11,22 @@ SCAN_DOMAIN() {
         mkdir -p "$(dirname "$OUTPUT")"
     fi
 
-    if ! touch "$OUTPUT" 2>/dev/null; then
+    if [[ -d "$OUTPUT" ]]; then
+        LOG "ERROR" "Output path is a directory: $OUTPUT"
+        echo -e "${RED}${BOLD}[ERROR]${NC} Output path is a directory: $OUTPUT"
+        exit 1
+    fi
+
+    local OUTPUT_EXISTS=false
+    [[ -e "$OUTPUT" ]] && OUTPUT_EXISTS=true
+
+    local OUTPUT_CHECK_FILE
+    OUTPUT_CHECK_FILE="$(mktemp "$(dirname "$OUTPUT")/.deepdns-write-check.XXXXXX" 2>/dev/null)" || {
         LOG "ERROR" "Cannot write to output file: $OUTPUT"
         echo -e "${RED}${BOLD}[ERROR]${NC} Cannot write to output file: $OUTPUT"
         exit 1
-    fi
+    }
+    rm -f "$OUTPUT_CHECK_FILE"
 
     echo -e "${BLUE}${BOLD}┌──────────────────────────────────────────────────────────────────────────┐${NC}"
     echo -e "${BLUE}${BOLD}│${NC}                           ${UNDERLINE}${BOLD}Scan Configuration${NC}                             ${BLUE}${BOLD}│${NC}"
@@ -26,9 +37,12 @@ SCAN_DOMAIN() {
     local SCAN_MODES=""
     [[ "$PASSIVE_SCAN_ENABLED" == true ]] && SCAN_MODES+="${GREEN}${BOLD}Passive${NC} "
     [[ "$ACTIVE_SCAN_ENABLED" == true ]] && SCAN_MODES+="${GREEN}${BOLD}Active${NC} "
-    [[ "$RECURSIVE_SCAN" == true ]] && SCAN_MODES+="${GREEN}${BOLD}Recursive(${RECURSIVE_DEPTH})${NC} "
+    [[ "$RECURSIVE_SCAN_ENABLED" == true ]] && SCAN_MODES+="${GREEN}${BOLD}Recursive(${RECURSIVE_DEPTH})${NC} "
     [[ "$VHOST_SCAN_ENABLED" == true ]] && SCAN_MODES+="${GREEN}${BOLD}VHost(${VHOST_PORTS[@]})${NC} "
     [[ "$PATTERN_RECOGNITION_ENABLED" == true ]] && SCAN_MODES+="${GREEN}${BOLD}Pattern${NC} "
+    [[ "$ZONE_TRANSFER_ENABLED" == true ]] && SCAN_MODES+="${GREEN}${BOLD}ZoneTransfer${NC} "
+    [[ "$DNSSEC_SCAN_ENABLED" == true ]] && SCAN_MODES+="${GREEN}${BOLD}DNSSEC${NC} "
+    [[ "$PENTEST_SCAN_ENABLED" == true ]] && SCAN_MODES+="${GREEN}${BOLD}Pentest(${PENTEST_PROFILE})${NC} "
 
     echo -e " ${PURPLE}${BOLD}Scan Modes${NC}       │ ${SCAN_MODES:-${RED}${BOLD}None${NC}}"
     
@@ -64,9 +78,12 @@ SCAN_DOMAIN() {
     local ACTIVE_OUT="$TEMP_DIR/${TARGET_DOMAIN}_active_tmp.txt"
     local VHOST_OUT="$TEMP_DIR/${TARGET_DOMAIN}_vhost_tmp.txt"
     local PATTERN_OUT="$TEMP_DIR/${TARGET_DOMAIN}_pattern_tmp.txt"
+    local ZONE_OUT="$TEMP_DIR/${TARGET_DOMAIN}_zone_tmp.txt"
     local FINAL_TMP="$TEMP_DIR/${TARGET_DOMAIN}_final_tmp.txt"
+    local REPORT_PREFIX="${OUTPUT%.*}"
+    local PENTEST_TARGETS="$TEMP_DIR/${TARGET_DOMAIN}_pentest_targets.txt"
 
-    if [[ "$RECURSIVE_SCAN" == true ]]; then
+    if [[ "$RECURSIVE_SCAN_ENABLED" == true ]]; then
         echo -e "\n${CYAN}${BOLD}[RECURSIVE SCAN]${NC} Starting recursive enumeration (depth: $RECURSIVE_DEPTH)"
         RECURSIVE_SCAN "$TARGET_DOMAIN" "$RECURSIVE_DEPTH" "$FINAL_TMP"
     else
@@ -74,12 +91,19 @@ SCAN_DOMAIN() {
         [[ "$ACTIVE_SCAN_ENABLED" == true ]] && ACTIVE_SCAN "$TARGET_DOMAIN" "$ACTIVE_OUT"
         [[ "$VHOST_SCAN_ENABLED" == true ]] && VHOST_SCAN "$TARGET_DOMAIN" "$VHOST_OUT"
         [[ "$PATTERN_RECOGNITION_ENABLED" == true ]] && DNS_PATTERN_RECOGNITION "$TARGET_DOMAIN" "$PATTERN_OUT"
+        [[ "$ZONE_TRANSFER_ENABLED" == true ]] && DNS_ZONE_TRANSFER "$TARGET_DOMAIN" "$ZONE_OUT" "${REPORT_PREFIX}_zone_transfer.txt"
+        [[ "$DNSSEC_SCAN_ENABLED" == true ]] && DNSSEC_SCAN "$TARGET_DOMAIN" "${REPORT_PREFIX}_dnssec.txt"
 
-        cat "$TEMP_DIR/${TARGET_DOMAIN}"_*_tmp.txt 2>/dev/null | sort -u >"$FINAL_TMP"
+        find "$TEMP_DIR" -maxdepth 1 -type f -name "${TARGET_DOMAIN}_*_tmp.txt" -exec cat {} + 2>/dev/null | sort -u >"$FINAL_TMP"
+    fi
+
+    if [[ "$PENTEST_SCAN_ENABLED" == true ]]; then
+        cp "$FINAL_TMP" "$PENTEST_TARGETS" 2>/dev/null || : >"$PENTEST_TARGETS"
+        RUN_PENTEST_CHECKS "$TARGET_DOMAIN" "$PENTEST_TARGETS" "$REPORT_PREFIX"
     fi
 
     # Check if output file exists and prompt for overwrite
-    if [[ -f "$OUTPUT" ]]; then
+    if [[ "$OUTPUT_EXISTS" == true ]]; then
         echo -e "${YELLOW}${BOLD}[!]${NC} Output file exists: ${CYAN}${BOLD}$OUTPUT${NC}"
         while true; do
             echo -n -e "${YELLOW}${BOLD}[?]${NC} Overwrite? [${GREEN}${BOLD}y${NC}/${RED}${BOLD}N${NC}] "
@@ -109,37 +133,36 @@ FORMAT_RESULTS() {
     local DOMAIN="$1"
     local OUTPUT_FILE="$2"
     local TEMP_FILE="$TEMP_DIR/format_temp.txt"
-    local TEMP_MERGED="$TEMP_DIR/format_merged.txt"
+    local TOTAL=0
+    local END_TIME
+    local DURATION
+    local DURATION_FORMATTED
 
     LOG "INFO" "Formatting results for $DOMAIN"
 
     if [[ "$RAW_OUTPUT" == true ]]; then
-        # For raw output, directly use collected results without extra processing
         if [[ -s "$OUTPUT_FILE" ]]; then
-            sort -u "$OUTPUT_FILE" > "$TEMP_FILE"
+            sort -u "$OUTPUT_FILE" >"$TEMP_FILE"
             mv "$TEMP_FILE" "$OUTPUT_FILE"
-            local TOTAL=$(wc -l < "$OUTPUT_FILE")
+            TOTAL=$(wc -l <"$OUTPUT_FILE")
             LOG "INFO" "Saved $TOTAL raw entries to $OUTPUT_FILE"
         else
-            # If no results in output file, try to find them in VHOST and other results
-            find "${TEMP_DIR}" -type f -name "*_results" -exec cat {} + | sort -u > "$OUTPUT_FILE"
-            TOTAL=$(wc -l < "$OUTPUT_FILE")
+            find "${TEMP_DIR}" -type f -name "*_results" -exec cat {} + | sort -u >"$OUTPUT_FILE"
+            TOTAL=$(wc -l <"$OUTPUT_FILE")
             LOG "WARNING" "No direct results found, recovered $TOTAL entries from scan files"
         fi
     else
-        # For normal output, process results from all scan types
         {
-            # Collect results from all potential sources
             if [[ -s "$OUTPUT_FILE" ]]; then
                 cat "$OUTPUT_FILE"
             fi
             find "${TEMP_DIR}" -type f -name "*_results" -exec cat {} + 2>/dev/null
-        } | grep -Eh "^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}($|:[0-9]+)" | 
-          sort -u | 
-          grep -v "^$DOMAIN$" > "$TEMP_FILE"
+        } | grep -Eh "^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}($|:[0-9]+)" |
+          sort -u |
+          grep -v "^$DOMAIN$" >"$TEMP_FILE"
 
-        mv "$TEMP_FILE" "$OUTPUT_FILE"
-        TOTAL=$(wc -l < "$OUTPUT_FILE")
+        TOTAL=$(wc -l <"$TEMP_FILE")
+        WRITE_FORMATTED_OUTPUT "$TEMP_FILE" "$OUTPUT_FILE" "$OUTPUT_FORMAT" "$DOMAIN"
         LOG "INFO" "Saved $TOTAL unique domains to $OUTPUT_FILE"
     fi
 
@@ -156,7 +179,7 @@ FORMAT_RESULTS() {
     echo -e " ${PURPLE}${BOLD}Finished${NC}         │ ${WHITE}${BOLD}$(date '+%Y-%m-%d %H:%M:%S')${NC}"
     echo -e " ${PURPLE}${BOLD}Output Location${NC}  | ${CYAN}${BOLD}$OUTPUT_FILE${NC}\n"
 
-    rm -f "$TEMP_FILE" "$TEMP_MERGED"
+    rm -f "$TEMP_FILE"
     return 0
 }
 

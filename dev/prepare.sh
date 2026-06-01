@@ -7,15 +7,9 @@ trap 'echo "Error on line $LINENO" >&2' ERR
 # Function to clean temporary files and logs
 CLEANUP_FILES() {
     printf "\033[1;32m[+]\033[0m Cleaning up temporary files and logs...\n"
-    # Clean debug logs
-    find "$MAIN_DIR" -type f -name "*.log" -delete 2>/dev/null || true
-    # Clean logs folders
-    find "$MAIN_DIR" -type d -name 'logs' -not -path '*.git*' -exec rm -rf {} + 2>/dev/null || true
-    # Clean domain output files
-    find "$MAIN_DIR" -type f -name "*.txt" -not -name "wordlist.txt" -not -name "mediumw.txt" -not -name "largew.txt" -not -name "resolvers.txt" -delete 2>/dev/null || true
-    # Clean temporary files
-    find "/tmp" -type f -name "deepdns*" -delete 2>/dev/null || true
-    find "/tmp" -type d -name "deepdns*" -exec rm -rf {} + 2>/dev/null || true
+    rm -f "$TEMP_FILE" 2>/dev/null || true
+    find "$RELEASES_DIR" -maxdepth 1 -type f -name "temp_deepdns*.sh" -delete 2>/dev/null || true
+    find "${TMPDIR:-/tmp}" -maxdepth 1 -type d -name "deepdns-tests.*" -exec rm -rf {} + 2>/dev/null || true
 }
 
 # Set script variables
@@ -24,9 +18,23 @@ RELEASES_DIR="$SCRIPT_DIR/releases"
 MAIN_DIR="$(dirname "$SCRIPT_DIR")" # Parent directory of dev
 TEMP_FILE="$RELEASES_DIR/temp_deepdns.sh"
 FINAL_FILE="$MAIN_DIR/deepdns.sh" # Changed path to parent directory
+TEST_SCRIPT="$SCRIPT_DIR/test/test.sh"
+BASHFRAME_FILE="$SCRIPT_DIR/vendor/bashframe.sh"
+BASHFRAME_FUNCTIONS="LOG IS_INSTALLED DOWNLOAD ASK_USER IS_EMPTY IS_NUMBER VAL_IP FILE_EXISTS FILE_EMPTY IS_READABLE IS_WRITABLE GENERATE_RANDOM"
 
 # Create release directory
 mkdir -p "$RELEASES_DIR"
+
+CHECK_PERMISSIONS() {
+    local DIR="$1"
+    if [ ! -w "$DIR" ]; then
+        printf "\033[1;31m[!]\033[0m No write permission in %s\n" "$DIR"
+        exit 1
+    fi
+}
+
+CHECK_PERMISSIONS "$RELEASES_DIR"
+CHECK_PERMISSIONS "$MAIN_DIR"
 
 # Clean up before starting
 CLEANUP_FILES
@@ -67,9 +75,53 @@ EXTRACT_CONTENT() {
     grep -v '^#\!/bin/bash$' "$FILE" | grep -v '^$' | grep -v '^source'
 }
 
+EXTRACT_FUNCTION() {
+    local FILE="$1"
+    local FUNCTION_NAME="$2"
+
+    awk -v fn="$FUNCTION_NAME" '
+        $0 ~ "^" fn "\\(\\)[[:space:]]*\\{" {
+            in_function = 1
+            found = 1
+        }
+        in_function {
+            line = $0
+            sub(/[[:space:]]+$/, "", line)
+            print line
+            if ($0 == "}") {
+                exit
+            }
+        }
+        END {
+            if (!found) {
+                exit 1
+            }
+        }
+    ' "$FILE"
+}
+
 # Combine files in the correct order
 printf "\033[1;32m[+]\033[0m Combining source files...\n"
 sed -i "s/VERSION=\"$CURRENT_VERSION\"/VERSION=\"$NEW_VERSION\"/" "$SCRIPT_DIR/config/settings.sh"
+
+# Add only the BashFrame functions used by DeepDNS.
+if [ ! -f "$BASHFRAME_FILE" ]; then
+    printf "\033[1;31m[!]\033[0m BashFrame file not found: %s\n" "$BASHFRAME_FILE"
+    rm -f "$TEMP_FILE"
+    exit 1
+fi
+
+echo "" >>"$TEMP_FILE"
+echo "# From BashFrame selected functions" >>"$TEMP_FILE"
+for FUNCTION_NAME in $BASHFRAME_FUNCTIONS; do
+    printf "\033[1;32m[+]\033[0m Adding BashFrame function: %s\n" "$FUNCTION_NAME"
+    if ! EXTRACT_FUNCTION "$BASHFRAME_FILE" "$FUNCTION_NAME" >>"$TEMP_FILE"; then
+        printf "\033[1;31m[!]\033[0m Missing BashFrame function: %s\n" "$FUNCTION_NAME"
+        rm -f "$TEMP_FILE"
+        exit 1
+    fi
+    echo "" >>"$TEMP_FILE"
+done
 
 # First add settings - with version replacement
 echo "" >>"$TEMP_FILE"
@@ -90,7 +142,7 @@ else
 fi
 
 # Define library files list and add libraries
-LIBRARY_FILES="core.sh utils.sh validation.sh dns.sh passive.sh active.sh scan.sh"
+LIBRARY_FILES="core.sh utils.sh validation.sh dns.sh passive.sh active.sh pentest.sh scan.sh"
 
 # Add library files in order
 for LIB in $LIBRARY_FILES; do
@@ -136,6 +188,20 @@ fi
 # Validate the generated script
 if bash -n "$TEMP_FILE"; then
     printf "\033[1;32m[+]\033[0m Syntax check passed\n"
+    if [ ! -f "$TEST_SCRIPT" ]; then
+        printf "\033[1;31m[!]\033[0m Unit test script not found: %s\n" "$TEST_SCRIPT"
+        rm -f "$TEMP_FILE"
+        exit 1
+    fi
+
+    printf "\033[1;32m[+]\033[0m Running unit tests...\n"
+    if ! bash "$TEST_SCRIPT"; then
+        printf "\033[1;31m[!]\033[0m Unit tests failed\n"
+        rm -f "$TEMP_FILE"
+        exit 1
+    fi
+
+    printf "\033[1;32m[+]\033[0m Unit tests passed\n"
     if mv "$TEMP_FILE" "$FINAL_FILE"; then
         printf "\033[1;32m[+]\033[0m Moved release to main directory: %s\n" "$MAIN_DIR"
     else
@@ -152,17 +218,3 @@ fi
 printf "\033[1;32m[✓]\033[0m Release prepared successfully!\n"
 printf "\033[1;32m[i]\033[0m Output file: %s\n" "$FINAL_FILE"
 printf "\033[1;32m[i]\033[0m Version: %s\n" "$NEW_VERSION"
-
-# Add file permission check
-CHECK_PERMISSIONS() {
-    local DIR="$1"
-    if [ ! -w "$DIR" ]; then
-        printf "\033[1;31m[!]\033[0m No write permission in %s\n" "$DIR"
-        exit 1
-    fi
-}
-
-CHECK_PERMISSIONS "$RELEASES_DIR"
-CHECK_PERMISSIONS "$MAIN_DIR"
-
-# TODO: RUN UNIT TESTS

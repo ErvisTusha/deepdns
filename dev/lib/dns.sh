@@ -5,7 +5,7 @@ CHECK_DNS_TOOLS() {
     local REQUIRED_TOOLS=("dig" "host" "nslookup")
 
     for TOOL in "${REQUIRED_TOOLS[@]}"; do
-        if ! command -v "$TOOL" >/dev/null 2>&1; then
+        if ! IS_INSTALLED "$TOOL"; then
             MISSING_TOOLS+=("$TOOL")
         fi
     done
@@ -21,6 +21,7 @@ CHECK_DNS_TOOLS() {
 
 declare -A RESOLVER_HEALTH
 declare -A RESOLVER_LAST_USED
+declare -g SELECTED_RESOLVER=""
 
 SELECT_RESOLVER() {
     local BEST_RESOLVER=""
@@ -54,6 +55,7 @@ SELECT_RESOLVER() {
     fi
 
     RESOLVER_LAST_USED[$BEST_RESOLVER]=$(date +%s)
+    SELECTED_RESOLVER="$BEST_RESOLVER"
     echo "$BEST_RESOLVER"
 }
 
@@ -68,6 +70,8 @@ UPDATE_RESOLVER_HEALTH() {
         RESOLVER_HEALTH[$RESOLVER]=$((${RESOLVER_HEALTH[$RESOLVER]:-100} - 20))
         [[ ${RESOLVER_HEALTH[$RESOLVER]} -lt 0 ]] && RESOLVER_HEALTH[$RESOLVER]=0
     fi
+
+    return 0
 }
 
 CHECK_SUBDOMAIN() {
@@ -76,7 +80,7 @@ CHECK_SUBDOMAIN() {
     local MAX_RETRIES=2
     local RETRY_COUNT=0
 
-    if [[ -z "$RESOLVERS" ]]; then
+    if [[ ${#RESOLVERS[@]} -eq 0 ]]; then
         if [[ -f "$RESOLVER_FILE" ]]; then
             mapfile -t RESOLVERS <"$RESOLVER_FILE"
         else
@@ -84,7 +88,8 @@ CHECK_SUBDOMAIN() {
         fi
     fi
 
-    local RESOLVER=$(SELECT_RESOLVER)
+    SELECT_RESOLVER >/dev/null
+    local RESOLVER="$SELECTED_RESOLVER"
 
     while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
         # Check with dig
@@ -94,7 +99,7 @@ CHECK_SUBDOMAIN() {
         if [[ -n "$DIG_RESULT" ]]; then
             # Validate each IP in result
             while read -r IP; do
-                if VALIDATE_IP "$IP"; then
+                if VAL_IP "$IP"; then
                     # Double check with host command
                     if host "$DOMAIN" "$RESOLVER" &>/dev/null; then
                         LOG "DEBUG" "Subdomain $DOMAIN verified (A: $IP) using resolver $RESOLVER"
@@ -109,7 +114,7 @@ CHECK_SUBDOMAIN() {
         local CNAME_RESULT
         CNAME_RESULT=$(dig +short "@$RESOLVER" "$DOMAIN" CNAME +time=$TIMEOUT 2>/dev/null)
 
-        if [[ -n "$CNAME_RESULT" ]] && [[ "$CNAME_RESULT" =~ \.$DOMAIN$ ]]; then
+        if [[ -n "$CNAME_RESULT" ]]; then
             if host "$DOMAIN" "$RESOLVER" &>/dev/null; then
                 LOG "DEBUG" "Subdomain $DOMAIN verified (CNAME: $CNAME_RESULT) using resolver $RESOLVER"
                 UPDATE_RESOLVER_HEALTH "$RESOLVER" 0
@@ -124,6 +129,107 @@ CHECK_SUBDOMAIN() {
     LOG "DEBUG" "Subdomain $DOMAIN not verified using resolver $RESOLVER"
     UPDATE_RESOLVER_HEALTH "$RESOLVER" 1
     return 1
+}
+
+DNS_ZONE_TRANSFER() {
+    local DOMAIN="$1"
+    local RESULTS_FILE="$2"
+    local REPORT_FILE="${3:-}"
+    local NS_SERVERS
+    local FOUND=false
+
+    NS_SERVERS=$(dig +short NS "$DOMAIN" 2>/dev/null | sed 's/\.$//' | sort -u)
+    if [[ -z "$NS_SERVERS" ]]; then
+        LOG "WARNING" "No nameservers found for zone transfer: $DOMAIN"
+        return 1
+    fi
+
+    [[ -n "$REPORT_FILE" ]] && {
+        printf "Zone transfer report for %s\n" "$DOMAIN"
+        printf "Generated: %s\n\n" "$(date '+%Y-%m-%d %H:%M:%S')"
+    } >"$REPORT_FILE"
+
+    echo -e "\n${CYAN}${BOLD}[ZONE TRANSFER]${NC} Checking AXFR exposure for $DOMAIN"
+    while IFS= read -r NS; do
+        [[ -z "$NS" ]] && continue
+        echo -e "${YELLOW}${BOLD}[*]${NC} Trying AXFR from ${WHITE}${BOLD}$NS${NC}"
+        LOG "INFO" "Attempting zone transfer for $DOMAIN from $NS"
+
+        local AXFR_OUTPUT
+        AXFR_OUTPUT=$(dig @"$NS" "$DOMAIN" AXFR +time=5 +tries=1 2>/dev/null || true)
+        if echo "$AXFR_OUTPUT" | grep -Eq '\sIN\s+(A|AAAA|CNAME|MX|NS|TXT|SRV)\s'; then
+            FOUND=true
+            echo -e "${RED}${BOLD}[!]${NC} Zone transfer succeeded from $NS"
+            [[ -n "$REPORT_FILE" ]] && {
+                printf "AXFR succeeded from %s\n" "$NS"
+                printf "%s\n\n" "$AXFR_OUTPUT"
+            } >>"$REPORT_FILE"
+            echo "$AXFR_OUTPUT" |
+                awk -v domain="$DOMAIN" '$1 ~ "\\." domain "\\.?$" { gsub(/\.$/, "", $1); print $1 }' |
+                sort -u >>"$RESULTS_FILE"
+        else
+            echo -e "${GREEN}${BOLD}[✓]${NC} AXFR refused by $NS"
+            [[ -n "$REPORT_FILE" ]] && printf "AXFR refused by %s\n" "$NS" >>"$REPORT_FILE"
+        fi
+    done <<<"$NS_SERVERS"
+
+    "$FOUND"
+}
+
+DNS_OUTPUT_HAS_RECORD() {
+    local OUTPUT="$1"
+    local RECORD_TYPE="$2"
+
+    echo "$OUTPUT" | awk -v type="$RECORD_TYPE" '
+        $0 !~ /^;/ && $0 ~ ("[[:space:]]IN[[:space:]]" type "([[:space:]]|$)") {
+            found = 1
+        }
+        END { exit(found ? 0 : 1) }
+    '
+}
+
+DNSSEC_SCAN() {
+    local DOMAIN="$1"
+    local REPORT_FILE="$2"
+    local DNSKEY_OUTPUT
+    local DS_OUTPUT
+    local SOA_DNSSEC_OUTPUT
+
+    echo -e "\n${CYAN}${BOLD}[DNSSEC]${NC} Checking DNSSEC posture for $DOMAIN"
+    LOG "INFO" "Starting DNSSEC scan for $DOMAIN"
+
+    DNSKEY_OUTPUT=$(dig "$DOMAIN" DNSKEY +dnssec +multi +time=5 +tries=1 2>/dev/null || true)
+    DS_OUTPUT=$(dig "$DOMAIN" DS +dnssec +multi +time=5 +tries=1 2>/dev/null || true)
+    SOA_DNSSEC_OUTPUT=$(dig "$DOMAIN" SOA +dnssec +multi +time=5 +tries=1 2>/dev/null || true)
+
+    {
+        printf "DNSSEC report for %s\n" "$DOMAIN"
+        printf "Generated: %s\n\n" "$(date '+%Y-%m-%d %H:%M:%S')"
+        printf "== DNSKEY ==\n%s\n\n" "$DNSKEY_OUTPUT"
+        printf "== DS ==\n%s\n\n" "$DS_OUTPUT"
+        printf "== SOA +dnssec ==\n%s\n" "$SOA_DNSSEC_OUTPUT"
+    } >"$REPORT_FILE"
+
+    if DNS_OUTPUT_HAS_RECORD "$DNSKEY_OUTPUT" "DNSKEY"; then
+        echo -e "${GREEN}${BOLD}[✓]${NC} DNSKEY records found"
+    else
+        echo -e "${YELLOW}${BOLD}[!]${NC} DNSKEY records not found"
+    fi
+
+    if DNS_OUTPUT_HAS_RECORD "$DS_OUTPUT" "DS"; then
+        echo -e "${GREEN}${BOLD}[✓]${NC} DS records found at parent"
+    else
+        echo -e "${YELLOW}${BOLD}[!]${NC} DS records not found at parent"
+    fi
+
+    if echo "$SOA_DNSSEC_OUTPUT" | grep -q ' ad;'; then
+        echo -e "${GREEN}${BOLD}[✓]${NC} Authenticated DNSSEC response observed"
+    else
+        echo -e "${YELLOW}${BOLD}[!]${NC} Authenticated DNSSEC response not observed"
+    fi
+
+    echo -e "${GREEN}${BOLD}[✓]${NC} DNSSEC report saved: ${CYAN}${BOLD}$REPORT_FILE${NC}"
+    return 0
 }
 
 SCAN_PATTERN_CHUNK() {
@@ -182,13 +288,12 @@ SCAN_PATTERN_CHUNK() {
 DNS_PATTERN_RECOGNITION() {
     local DOMAIN="$1"
     local OUTPUT_FILE="$2"
-    local FOUND_COUNT=0
     local RESULTS_FILE="$TEMP_DIR/pattern_results.txt"
     local THREAD_DIR="$TEMP_DIR/pattern_threads"
     local LOCK_DIR="$THREAD_DIR/locks"
     local PROGRESS_FILE="$THREAD_DIR/progress"
     local LOCK_FILE="$LOCK_DIR/progress.lock"
-    
+
     # Create required directories first
     for DIR in "$THREAD_DIR" "$LOCK_DIR"; do
         if ! mkdir -p "$DIR"; then
@@ -263,15 +368,8 @@ DNS_PATTERN_RECOGNITION() {
 
     echo -e "${INDENT}${CYAN}${BOLD}[*]${NC} ${WHITE}${BOLD}Pattern Recognition${NC} for ${YELLOW}${BOLD}$DOMAIN${NC}"
 
-    #WILDCARD_DETECTION "$DOMAIN" "$INDENT"
-    COMMAND_STATUS=$?
-    LOG "DEBUG" "Wildcard detection returned status: $COMMAND_STATUS"
-    if [ $COMMAND_STATUS == 2 ]; then
-        LOG "INFO" "Aborting scan due to wildcard detection user choice"
-        return 0
-    fi
-
     # Calculate total patterns
+    local TOTAL_PATTERNS=0
     for CATEGORY in "${!PATTERNS[@]}"; do
         for PATTERN in ${PATTERNS[$CATEGORY]}; do
             ((TOTAL_PATTERNS++))
@@ -289,7 +387,6 @@ DNS_PATTERN_RECOGNITION() {
     # Create pattern chunks
     local CHUNK_SIZE=$(((TOTAL_PATTERNS + THREAD_COUNT - 1) / THREAD_COUNT))
     local CURRENT_CHUNK=0
-    local CURRENT_CHUNK_FILE="$THREAD_DIR/chunk_$CURRENT_CHUNK"
     local PATTERN_COUNT=0
 
     # Create directory for chunks
@@ -337,12 +434,7 @@ DNS_PATTERN_RECOGNITION() {
     # Collect and process results
     if find "$THREAD_DIR" -name "results_chunk_*" -type f | grep -q .; then
         cat "$THREAD_DIR"/results_chunk_* | sort -u >"$RESULTS_FILE"
-        FOUND_COUNT=$(wc -l <"$RESULTS_FILE")
     fi
-
-    # Add result display vars
-    local CATEGORY_COUNTS=()
-    local TOTAL_FOUND=0
 
     echo -e -n "\033[1A\033[2K\r"
     echo -e "${INDENT}${GREEN}${BOLD}[✓]${NC} Pattern scan complete. Processing results..."
@@ -372,7 +464,6 @@ DNS_PATTERN_RECOGNITION() {
                 CATEGORY_COUNT=0
             fi
             ((CATEGORY_COUNT++))
-            ((TOTAL_FOUND++))
             ((NEW_FINDINGS++))
             echo -e "${INDENT}           ${GREEN}${BOLD}├─${NC} ${SUBDOMAIN}"
             echo "$SUBDOMAIN" >>"$OUTPUT_FILE"
@@ -395,9 +486,6 @@ DNS_PATTERN_RECOGNITION() {
 
     # If this is not a recursive scan, cleanup the global patterns file
     [[ "$RECURSIVE_SCAN_ENABLED" == false ]] && rm -f "$GLOBAL_PATTERNS_FILE"
-
-    # Add cleanup trap for pattern recognition
-    trap 'rm -rf "$THREAD_DIR" "$LOCK_DIR" 2>/dev/null' EXIT
 
     return 0
 }

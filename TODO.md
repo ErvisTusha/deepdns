@@ -1,9 +1,7 @@
-**TODO: use functions from ./dev/lib/core.sh**
-
-**TOOD: add format output**
-
-**TODO: add more services for passive scan**
-
-**TODO: Zone transfer**
-
-**TODO: DNSSEC**
+Implemented:
+- Core helper reuse
+- TXT/JSON/CSV output formatting
+- Expanded passive sources
+- Zone transfer checks
+- DNSSEC checks
+- Pentest checks with profiles, findings, and raw evidence

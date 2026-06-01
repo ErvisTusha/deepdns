@@ -15,6 +15,9 @@ declare -g FILES_DIR="$HOME_DIR/files"
 declare -g DEBUG_LOG="$LOG_DIR/debug.log"
 
 # Global variables
+declare -g SCRIPT="$(basename "$0")"
+declare -g DOMAIN=""
+declare -g OUTPUT=""
 declare -g START_TIME=$(date +%s)
 declare -g TEMP_DIR=""
 declare -g VERBOSE=false
@@ -39,7 +42,12 @@ declare -g ACTIVE_SCAN_ENABLED=false
 declare -g RECURSIVE_SCAN_ENABLED=false
 declare -g VHOST_SCAN_ENABLED=false
 declare -g PATTERN_RECOGNITION_ENABLED=false
+declare -g ZONE_TRANSFER_ENABLED=false
+declare -g DNSSEC_SCAN_ENABLED=false
+declare -g PENTEST_SCAN_ENABLED=false
+declare -g RESOLVER_SCAN=false
 declare -g API_VALIDATION_ENABLED=true
+declare -g RESOLVER_FILE=""
 
 declare -g VHOST_PORTS=(80 443)
 
@@ -53,11 +61,11 @@ declare -r NC='\033[0m'
 declare -r BOLD='\033[1m'
 declare -r GRAY='\033[0;90m'
 declare -r PURPLE='\033[0;35m'
+declare -r MAGENTA='\033[0;35m'
 declare -r DIM='\033[2m'
 declare -r UNDERLINE='\033[4m'
 declare -r WHITE='\033[1;37m'
 
-# Add these variables near the top with other declarations
 declare -g CLEANUP_DONE=false
 declare -g INTERRUPT_RECEIVED=false
 
@@ -70,11 +78,19 @@ declare -g THREAD_COUNT=10
 
 # GitHub repository URL
 declare -g REPO_URL="https://raw.githubusercontent.com/ErvisTusha/deepdns/main/deepdns.sh"
+declare -g RELEASE_SIGNATURE_URL="${REPO_URL}.asc"
+declare -g RELEASE_SIGNING_KEY_URL="https://raw.githubusercontent.com/ErvisTusha/deepdns/main/security/deepdns-release.gpg"
+declare -g RELEASE_SIGNING_FINGERPRINT=""
+declare -g RELEASE_SIGNATURE_REQUIRED=false
 
 # Raw output flag
 declare -g RAW_OUTPUT=false
 
-
-declare -g CLEANUP_DONE="false"
-declare -g INTERRUPT_RECEIVED="false"
-declare -g PATTERN_SCAN_CLEANED="false"
+# Pentest checks
+declare -g PENTEST_PROFILE="safe"
+declare -g PENTEST_CHECKS=""
+declare -g PENTEST_EVIDENCE_DIR=""
+declare -g PENTEST_FINDINGS_FILE=""
+declare -g PENTEST_JSON_ITEMS_FILE=""
+declare -g PENTEST_FINDING_COUNT=0
+declare -g PENTEST_RAW_EVIDENCE=true

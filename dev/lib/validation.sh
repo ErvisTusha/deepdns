@@ -1,22 +1,5 @@
 #!/bin/bash
 
-VALIDATE_IP() {
-    local IP="$1"
-    if [[ ! "$IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        return 1
-    fi
-
-    # Check each octet
-    local IFS='.'
-    read -ra OCTETS <<<"$IP"
-    for OCTET in "${OCTETS[@]}"; do
-        if [[ "$OCTET" -lt 0 || "$OCTET" -gt 255 ]]; then
-            return 1
-        fi
-    done
-    return 0
-}
-
 VALIDATE_DOMAIN() {
     LOG "DEBUG" "Starting VALIDATE_DOMAIN with input: $1"
     if ! [[ "$1" =~ ^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
@@ -33,14 +16,21 @@ VALIDATE_API_KEY() {
 
     [[ "$API_VALIDATION_ENABLED" == false ]] && return 0
 
+    local VALID=1
     case "$TYPE" in
-    "ST") [[ ${#KEY} -eq 32 && $KEY =~ ^[A-Za-z0-9]+$ ]] ;;
-    "VT") [[ ${#KEY} -eq 64 && $KEY =~ ^[A-Za-z0-9]+$ ]] ;;
-    "CENSYS") [[ ${#KEY} -ge 32 && $KEY =~ ^[A-Za-z0-9_-]+$ ]] ;;
+    "ST") [[ ${#KEY} -eq 32 && $KEY =~ ^[A-Za-z0-9]+$ ]] && VALID=0 ;;
+    "VT") [[ ${#KEY} -eq 64 && $KEY =~ ^[A-Za-z0-9]+$ ]] && VALID=0 ;;
+    "CENSYS") [[ ${#KEY} -ge 32 && $KEY =~ ^[A-Za-z0-9_-]+$ ]] && VALID=0 ;;
     *) return 1 ;;
     esac
-    LOG "DEBUG" "Validated $TYPE API key"
-    return $?
+
+    if [[ $VALID -eq 0 ]]; then
+        LOG "DEBUG" "Validated $TYPE API key"
+        return 0
+    fi
+
+    LOG "ERROR" "Invalid $TYPE API key"
+    return 1
 }
 
 VALIDATE_WORDLIST_CHUNK() {
@@ -108,7 +98,7 @@ CLEAN_WORDLIST() {
         echo -e "${RED}${BOLD}[!]${NC} No valid entries found in wordlist"
         LOG "ERROR" "No valid entries found in $INPUT_FILE"
         rm -rf "$THREAD_DIR"
-        exit 1 # Changed from return 1 to exit 1
+        exit 1
     fi
 
     echo -e "${YELLOW}${BOLD}[*]${NC} Processing $TOTAL_COUNT unique entries..."
